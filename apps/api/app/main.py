@@ -16,7 +16,7 @@ import httpx
 from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .audio import extension_for_mime
@@ -37,8 +37,11 @@ from .models import (
 )
 from .schemas import (
     AdminLoginRequest,
+    AdminRecordingOut,
+    AdminStudyOut,
     AttemptCreateRequest,
     AttemptOut,
+    BulkReviewRequest,
     BulkInviteRequest,
     ConsentRequest,
     ExchangeRequest,
@@ -47,7 +50,10 @@ from .schemas import (
     InviteOut,
     ParticipantContext,
     QCUpdateRequest,
+    ReviewUpdateRequest,
     StudyCreateRequest,
+    StudyStatsOut,
+    StudyUpdateRequest,
     StudyOut,
 )
 from .security import digest, expires_in, hash_password, new_token, verify_otp, verify_password
@@ -82,6 +88,65 @@ def _study_to_out(study: Study) -> StudyOut:
 
 def _attempt_to_out(attempt: RecordingAttempt) -> AttemptOut:
     return AttemptOut.model_validate(attempt)
+
+
+def _study_stats_map(db: Session, study_ids: list[str]) -> dict[str, StudyStatsOut]:
+    result = {study_id: StudyStatsOut() for study_id in study_ids}
+    if not study_ids:
+        return result
+    invite_rows = db.execute(
+        select(
+            Invite.study_id,
+            func.count(Invite.id),
+            func.sum(case((Invite.status == "submitted", 1), else_=0)),
+        ).where(Invite.study_id.in_(study_ids)).group_by(Invite.study_id)
+    ).all()
+    for study_id, total, submitted in invite_rows:
+        result[study_id].invites_total = total or 0
+        result[study_id].participants_submitted = submitted or 0
+    recording_rows = db.execute(
+        select(
+            Invite.study_id,
+            func.count(RecordingAttempt.id),
+            func.sum(case((RecordingAttempt.state.in_(["queued", "processing"]), 1), else_=0)),
+            func.sum(case((RecordingAttempt.auto_quality_status == "pass", 1), else_=0)),
+            func.sum(case((RecordingAttempt.auto_quality_status == "review", 1), else_=0)),
+            func.sum(case((RecordingAttempt.auto_quality_status == "reject", 1), else_=0)),
+            func.sum(case((RecordingAttempt.review_status == "pending", 1), else_=0)),
+            func.sum(case((RecordingAttempt.review_status == "approved", 1), else_=0)),
+            func.sum(case((RecordingAttempt.review_status == "rejected", 1), else_=0)),
+        )
+        .join(Invite, Invite.id == RecordingAttempt.invite_id)
+        .where(Invite.study_id.in_(study_ids))
+        .group_by(Invite.study_id)
+    ).all()
+    for row in recording_rows:
+        stats = result[row[0]]
+        (
+            stats.recordings_total, stats.processing, stats.quality_high,
+            stats.quality_review, stats.quality_reject, stats.review_pending,
+            stats.review_approved, stats.review_rejected,
+        ) = [value or 0 for value in row[1:]]
+    return result
+
+
+def _admin_recording_out(db: Session, attempt: RecordingAttempt, invite: Invite) -> AdminRecordingOut:
+    reviewer = db.get(AdminUser, attempt.reviewed_by) if attempt.reviewed_by else None
+    metrics = attempt.qc_metrics or {}
+    reasons = metrics.get("quality_reasons")
+    variants: list[str] = []
+    if attempt.original_path and (settings.media_root / attempt.original_path).is_file():
+        variants.append("original")
+    if attempt.normalized_path and (settings.media_root / attempt.normalized_path).is_file():
+        variants.append("normalized")
+    return AdminRecordingOut(
+        participant_code=invite.participant_code,
+        invite_id=invite.id,
+        attempt=_attempt_to_out(attempt),
+        reviewer_username=reviewer.username if reviewer else None,
+        quality_reasons=[str(item) for item in reasons] if isinstance(reasons, list) else [],
+        audio_variants=variants,
+    )
 
 
 def _follow_along_enabled(study: Study) -> bool:
@@ -418,7 +483,9 @@ def participant_consent(request: ConsentRequest, participant_session: str | None
 
 @app.post("/api/v1/participant/attempts", response_model=AttemptOut)
 def create_attempt(request: AttemptCreateRequest, participant_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> AttemptOut:
-    _, invite, _study = _participant_from_cookie(db, participant_session)
+    _, invite, study = _participant_from_cookie(db, participant_session)
+    if study.status != "open":
+        raise HTTPException(status_code=409, detail="任务已经关闭，不能开始新的录音")
     consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.confirmed.is_(True)))
     if not consent:
         raise HTTPException(status_code=403, detail="请先确认知情同意")
@@ -510,20 +577,63 @@ def admin_login(request: AdminLoginRequest, response: Response, db: Session = De
     return {"username": user.username}
 
 
+@app.get("/api/v1/admin/session")
+def admin_session_info(admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> dict[str, str]:
+    user = _admin_from_cookie(db, admin_session)
+    return {"username": user.username}
+
+
+@app.delete("/api/v1/admin/session", status_code=204)
+def admin_logout(response: Response, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> None:
+    if admin_session:
+        session = db.scalar(select(AdminSession).where(AdminSession.session_digest == digest(admin_session)))
+        if session:
+            db.delete(session)
+            db.commit()
+    response.delete_cookie("admin_session", secure=settings.app_env == "production", samesite="lax")
+
+
 @app.get("/api/v1/admin/dashboard")
 def admin_dashboard(admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> dict[str, object]:
-    user = _admin_from_cookie(db, admin_session)
+    _admin_from_cookie(db, admin_session)
     study = db.scalar(select(Study).order_by(Study.created_at.desc()))
-    total = db.scalar(select(func.count(Invite.id)).where(Invite.study_id == study.id)) if study else 0
-    submitted = db.scalar(select(func.count(Invite.id)).where(Invite.study_id == study.id, Invite.status == "submitted")) if study else 0
-    processing = db.scalar(select(func.count(RecordingAttempt.id)).where(RecordingAttempt.state.in_(["queued", "processing"])))
-    _ = user
-    return {"study": _study_to_out(study) if study else None, "total": total or 0, "submitted": submitted or 0, "processing": processing or 0}
+    stats = _study_stats_map(db, [study.id])[study.id] if study else StudyStatsOut()
+    return {"study": _study_to_out(study) if study else None, "total": stats.invites_total, "submitted": stats.participants_submitted, "processing": stats.processing}
+
+
+@app.get("/api/v1/admin/studies")
+def list_studies(
+    admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db),
+    status_filter: str | None = None, query: str | None = None, limit: int = 100, offset: int = 0,
+) -> dict[str, object]:
+    _admin_from_cookie(db, admin_session)
+    statement = select(Study)
+    if status_filter:
+        statuses = [item for item in status_filter.split(",") if item in {"draft", "open", "closed", "archived"}]
+        if statuses:
+            statement = statement.where(Study.status.in_(statuses))
+    if query:
+        statement = statement.where(Study.title.ilike(f"%{query.strip()}%"))
+    total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    studies = db.scalars(statement.order_by(Study.updated_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200))).all()
+    stats = _study_stats_map(db, [study.id for study in studies])
+    return {"items": [AdminStudyOut(study=_study_to_out(study), stats=stats[study.id]).model_dump() for study in studies], "total": total}
+
+
+@app.get("/api/v1/admin/studies/{study_id}", response_model=AdminStudyOut)
+def get_study(study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> AdminStudyOut:
+    _admin_from_cookie(db, admin_session)
+    study = db.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return AdminStudyOut(study=_study_to_out(study), stats=_study_stats_map(db, [study.id])[study.id])
 
 
 @app.post("/api/v1/admin/studies", response_model=StudyOut)
 def create_study(request: StudyCreateRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
     user = _admin_from_cookie(db, admin_session)
+    if request.min_seconds > request.expected_seconds or request.expected_seconds > request.max_seconds:
+        raise HTTPException(status_code=422, detail="时长必须满足最短时长 ≤ 预计时长 ≤ 最长时长")
     study = Study(id=str(uuid.uuid4()), title=request.title, text=request.text, instructions=request.instructions,
                   text_version=f"v{int(datetime.now(timezone.utc).timestamp())}", status="draft",
                   expected_seconds=request.expected_seconds, min_seconds=request.min_seconds,
@@ -534,14 +644,82 @@ def create_study(request: StudyCreateRequest, admin_session: str | None = Cookie
     return _study_to_out(study)
 
 
+@app.patch("/api/v1/admin/studies/{study_id}", response_model=StudyOut)
+def update_study(study_id: str, request: StudyUpdateRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
+    user = _admin_from_cookie(db, admin_session)
+    study = db.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿任务可以修改内容")
+    values = request.model_dump(exclude_none=True)
+    proposed = {
+        "expected_seconds": values.get("expected_seconds", study.expected_seconds),
+        "min_seconds": values.get("min_seconds", study.min_seconds),
+        "max_seconds": values.get("max_seconds", study.max_seconds),
+    }
+    if proposed["min_seconds"] > proposed["expected_seconds"] or proposed["expected_seconds"] > proposed["max_seconds"]:
+        raise HTTPException(status_code=422, detail="时长必须满足最短时长 ≤ 预计时长 ≤ 最长时长")
+    for field, value in values.items():
+        setattr(study, field, value)
+    study.text_version = f"v{int(datetime.now(timezone.utc).timestamp())}"
+    _audit(db, "study_updated", "admin", user.id, "study", study.id, values)
+    db.commit()
+    return _study_to_out(study)
+
+
 @app.post("/api/v1/admin/studies/{study_id}/open", response_model=StudyOut)
 def open_study(study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
     user = _admin_from_cookie(db, admin_session)
     study = db.get(Study, study_id)
     if not study:
         raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status not in {"draft", "closed"}:
+        raise HTTPException(status_code=409, detail="任务当前无法开放")
     study.status = "open"
     _audit(db, "study_opened", "admin", user.id, "study", study.id)
+    db.commit()
+    return _study_to_out(study)
+
+
+@app.post("/api/v1/admin/studies/{study_id}/close", response_model=StudyOut)
+def close_study(study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
+    user = _admin_from_cookie(db, admin_session)
+    study = db.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status != "open":
+        raise HTTPException(status_code=409, detail="只有开放中的任务可以关闭")
+    study.status = "closed"
+    _audit(db, "study_closed", "admin", user.id, "study", study.id)
+    db.commit()
+    return _study_to_out(study)
+
+
+@app.post("/api/v1/admin/studies/{study_id}/archive", response_model=StudyOut)
+def archive_study(study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
+    user = _admin_from_cookie(db, admin_session)
+    study = db.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status not in {"draft", "closed"}:
+        raise HTTPException(status_code=409, detail="开放中的任务需要先关闭")
+    study.status = "archived"
+    _audit(db, "study_archived", "admin", user.id, "study", study.id)
+    db.commit()
+    return _study_to_out(study)
+
+
+@app.post("/api/v1/admin/studies/{study_id}/restore", response_model=StudyOut)
+def restore_study(study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> StudyOut:
+    user = _admin_from_cookie(db, admin_session)
+    study = db.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status != "archived":
+        raise HTTPException(status_code=409, detail="只有归档任务可以恢复")
+    study.status = "closed"
+    _audit(db, "study_restored", "admin", user.id, "study", study.id)
     db.commit()
     return _study_to_out(study)
 
@@ -552,6 +730,8 @@ def create_invites(request: BulkInviteRequest, admin_session: str | None = Cooki
     study = db.get(Study, request.study_id)
     if not study:
         raise HTTPException(status_code=404, detail="任务不存在")
+    if study.status != "open":
+        raise HTTPException(status_code=409, detail="只有开放中的任务可以生成邀请码")
     current = db.scalar(select(func.count(Invite.id)).where(Invite.study_id == study.id)) or 0
     result: list[InviteOut] = []
     for index in range(request.count):
@@ -566,10 +746,43 @@ def create_invites(request: BulkInviteRequest, admin_session: str | None = Cooki
 
 
 @app.get("/api/v1/admin/recordings")
-def list_recordings(admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db), limit: int = 100, offset: int = 0) -> dict[str, object]:
+def list_recordings(admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db), study_id: str | None = None, limit: int = 100, offset: int = 0) -> dict[str, object]:
     _admin_from_cookie(db, admin_session)
-    rows = db.execute(select(RecordingAttempt, Invite).join(Invite, Invite.id == RecordingAttempt.invite_id).order_by(RecordingAttempt.created_at.desc()).limit(min(limit, 200)).offset(max(offset, 0))).all()
+    statement = select(RecordingAttempt, Invite).join(Invite, Invite.id == RecordingAttempt.invite_id)
+    if study_id:
+        statement = statement.where(Invite.study_id == study_id)
+    rows = db.execute(statement.order_by(RecordingAttempt.created_at.desc()).limit(min(limit, 200)).offset(max(offset, 0))).all()
     return {"items": [{"participant_code": invite.participant_code, "attempt": _attempt_to_out(attempt).model_dump()} for attempt, invite in rows]}
+
+
+@app.get("/api/v1/admin/studies/{study_id}/recordings")
+def list_study_recordings(
+    study_id: str, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db),
+    participant: str | None = None, state: str | None = None, auto_quality_status: str | None = None,
+    review_status: str | None = None, limit: int = 50, offset: int = 0,
+) -> dict[str, object]:
+    _admin_from_cookie(db, admin_session)
+    if not db.get(Study, study_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    statement = select(RecordingAttempt, Invite).join(Invite, Invite.id == RecordingAttempt.invite_id).where(Invite.study_id == study_id)
+    if participant:
+        statement = statement.where(Invite.participant_code.ilike(f"%{participant.strip()}%"))
+    if state:
+        states = [item for item in state.split(",") if item]
+        statement = statement.where(RecordingAttempt.state.in_(states))
+    if auto_quality_status:
+        qualities = [item for item in auto_quality_status.split(",") if item in {"pending", "pass", "review", "reject"}]
+        if qualities:
+            statement = statement.where(RecordingAttempt.auto_quality_status.in_(qualities))
+    if review_status:
+        reviews = [item for item in review_status.split(",") if item in {"pending", "approved", "rejected"}]
+        if reviews:
+            statement = statement.where(RecordingAttempt.review_status.in_(reviews))
+    total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    rows = db.execute(
+        statement.order_by(RecordingAttempt.created_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200))
+    ).all()
+    return {"items": [_admin_recording_out(db, attempt, invite).model_dump() for attempt, invite in rows], "total": total}
 
 
 @app.get("/api/v1/admin/recordings/{attempt_id}/audio")
@@ -600,14 +813,49 @@ def reopen_invite(invite_id: str, admin_session: str | None = Cookie(default=Non
     return {"status": invite.status}
 
 
+def _apply_review(db: Session, user: AdminUser, attempt: RecordingAttempt, review_status: str, note: str | None) -> None:
+    attempt.review_status = review_status
+    attempt.review_note = note.strip() if note and note.strip() else None
+    attempt.reviewed_at = utcnow() if review_status != "pending" else None
+    attempt.reviewed_by = user.id if review_status != "pending" else None
+    _audit(db, "recording_review_updated", "admin", user.id, "recording_attempt", attempt.id, {
+        "status": review_status, "note": attempt.review_note,
+    })
+
+
+@app.patch("/api/v1/admin/recordings/{attempt_id}/review", response_model=AttemptOut)
+def update_review(attempt_id: str, request: ReviewUpdateRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> AttemptOut:
+    user = _admin_from_cookie(db, admin_session)
+    attempt = db.get(RecordingAttempt, attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="录音不存在")
+    _apply_review(db, user, attempt, request.review_status, request.note)
+    db.commit()
+    return _attempt_to_out(attempt)
+
+
+@app.patch("/api/v1/admin/recordings/review/bulk")
+def bulk_update_review(request: BulkReviewRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> dict[str, int]:
+    user = _admin_from_cookie(db, admin_session)
+    attempt_ids = list(dict.fromkeys(request.attempt_ids))
+    attempts = db.scalars(select(RecordingAttempt).where(RecordingAttempt.id.in_(attempt_ids))).all()
+    if len(attempts) != len(attempt_ids):
+        raise HTTPException(status_code=404, detail="部分录音不存在，请刷新列表后重试")
+    for attempt in attempts:
+        _apply_review(db, user, attempt, request.review_status, request.note)
+    db.commit()
+    return {"updated": len(attempts)}
+
+
 @app.patch("/api/v1/admin/recordings/{attempt_id}/qc", response_model=AttemptOut)
 def update_qc(attempt_id: str, request: QCUpdateRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> AttemptOut:
     user = _admin_from_cookie(db, admin_session)
     attempt = db.get(RecordingAttempt, attempt_id)
     if not attempt:
         raise HTTPException(status_code=404, detail="录音不存在")
-    attempt.qc_status = request.qc_status
-    _audit(db, "recording_qc_updated", "admin", user.id, "recording_attempt", attempt.id, {"status": request.qc_status, "note": request.note})
+    mapped_status = "approved" if request.qc_status == "pass" else "rejected" if request.qc_status == "reject" else "pending"
+    _apply_review(db, user, attempt, mapped_status, request.note)
+    _audit(db, "recording_qc_compat_updated", "admin", user.id, "recording_attempt", attempt.id, {"status": request.qc_status})
     db.commit()
     return _attempt_to_out(attempt)
 

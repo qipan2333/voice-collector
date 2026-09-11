@@ -8,6 +8,7 @@
 - FastAPI API、PostgreSQL 数据库
 - 邀请码会话、知情同意确认、录音上传与状态查询
 - 本地声音活动驱动的跟读高亮、自动滚动和小米 MiMo ASR 位置校准
+- 多任务管理工作台、独立质量统计、在线播放和批量人工审核
 - ffmpeg worker 的标准化入口
 - Docker Compose、Caddy、健康检查和本机备份脚本
 

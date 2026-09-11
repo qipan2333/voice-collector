@@ -19,18 +19,33 @@
 
 ```text
 POST  /api/v1/admin/login
+GET   /api/v1/admin/session
+DELETE /api/v1/admin/session
 GET   /api/v1/admin/dashboard
+GET   /api/v1/admin/studies
+GET   /api/v1/admin/studies/{id}
 POST  /api/v1/admin/studies
+PATCH /api/v1/admin/studies/{id}
 POST  /api/v1/admin/studies/{id}/open
+POST  /api/v1/admin/studies/{id}/close
+POST  /api/v1/admin/studies/{id}/archive
+POST  /api/v1/admin/studies/{id}/restore
 POST  /api/v1/admin/invites/bulk
 GET   /api/v1/admin/recordings
+GET   /api/v1/admin/studies/{id}/recordings
 GET   /api/v1/admin/recordings/{id}/audio
 POST  /api/v1/admin/invites/{id}/reopen
+PATCH /api/v1/admin/recordings/{id}/review
+PATCH /api/v1/admin/recordings/review/bulk
 PATCH /api/v1/admin/recordings/{id}/qc
 POST  /api/v1/admin/exports
 GET   /api/v1/admin/exports/{id}
 GET   /api/v1/admin/exports/{id}/download
 ```
+
+任务状态为 `draft`、`open`、`closed`、`archived`。只有草稿可以修改内容；关闭任务会阻止创建新录音，但已创建的上传和处理任务会继续。
+
+自动质量状态为 `pending/pass/review/reject`，人工审核状态独立为 `pending/approved/rejected`。旧 QC 更新接口保留为兼容入口，新管理页面使用 review 接口。
 
 ## 状态
 

@@ -47,6 +47,8 @@ Web 仅绑定 `127.0.0.1:5173`，API 没有宿主机端口映射。已有 Nginx 
 
 ## 更新与回滚
 
+更新前必须备份 PostgreSQL 和 `data`。API 容器启动时会先执行 Alembic 迁移；worker 和 web 均等待 API 健康后启动，避免新代码在迁移完成前读取旧表结构。
+
 ```bash
 docker compose -f ops/docker-compose.yml pull
 docker compose -f ops/docker-compose.yml up -d --build

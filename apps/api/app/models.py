@@ -90,12 +90,24 @@ class RecordingAttempt(Base):
     browser_family: Mapped[str | None] = mapped_column(String(100), nullable=True)
     os_family: Mapped[str | None] = mapped_column(String(100), nullable=True)
     recorder_settings: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
-    qc_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    auto_quality_status: Mapped[str] = mapped_column("qc_status", String(20), default="pending", index=True)
     qc_metrics: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def qc_status(self) -> str:
+        return self.auto_quality_status
+
+    @qc_status.setter
+    def qc_status(self, value: str) -> None:
+        self.auto_quality_status = value
 
 
 class ProcessingJob(Base):

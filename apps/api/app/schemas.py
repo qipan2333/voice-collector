@@ -39,6 +39,8 @@ class StudyOut(BaseModel):
     min_seconds: int
     max_seconds: int
     consent_version: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class AttemptOut(BaseModel):
@@ -48,6 +50,10 @@ class AttemptOut(BaseModel):
     attempt_no: int
     state: str
     qc_status: str
+    auto_quality_status: str
+    review_status: str = "pending"
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
     original_mime: str | None = None
     original_size: int | None = None
     duration_seconds: float | None = None
@@ -97,9 +103,55 @@ class StudyCreateRequest(BaseModel):
     consent_version: str = Field(default="consent-v2-mimo-asr", max_length=64)
 
 
+class StudyUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    text: str | None = Field(default=None, min_length=1)
+    instructions: str | None = None
+    expected_seconds: int | None = Field(default=None, ge=30, le=900)
+    min_seconds: int | None = Field(default=None, ge=1, le=900)
+    max_seconds: int | None = Field(default=None, ge=30, le=900)
+    consent_version: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class StudyStatsOut(BaseModel):
+    invites_total: int = 0
+    participants_submitted: int = 0
+    recordings_total: int = 0
+    processing: int = 0
+    quality_high: int = 0
+    quality_review: int = 0
+    quality_reject: int = 0
+    review_pending: int = 0
+    review_approved: int = 0
+    review_rejected: int = 0
+
+
+class AdminStudyOut(BaseModel):
+    study: StudyOut
+    stats: StudyStatsOut
+
+
+class AdminRecordingOut(BaseModel):
+    participant_code: str
+    invite_id: str
+    attempt: AttemptOut
+    reviewer_username: str | None = None
+    quality_reasons: list[str] = Field(default_factory=list)
+    audio_variants: list[str] = Field(default_factory=list)
+
+
 class QCUpdateRequest(BaseModel):
     qc_status: str = Field(pattern="^(pending|pass|review|reject)$")
     note: str | None = Field(default=None, max_length=2000)
+
+
+class ReviewUpdateRequest(BaseModel):
+    review_status: str = Field(pattern="^(pending|approved|rejected)$")
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class BulkReviewRequest(ReviewUpdateRequest):
+    attempt_ids: list[str] = Field(min_length=1, max_length=200)
 
 
 class ExportRequest(BaseModel):

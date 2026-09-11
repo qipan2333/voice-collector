@@ -11,6 +11,8 @@ export type Study = {
   min_seconds: number
   max_seconds: number
   consent_version: string
+  created_at: string
+  updated_at: string
 }
 
 export type Attempt = {
@@ -18,6 +20,10 @@ export type Attempt = {
   attempt_no: number
   state: string
   qc_status: string
+  auto_quality_status: string
+  review_status: 'pending' | 'approved' | 'rejected'
+  review_note?: string
+  reviewed_at?: string
   original_mime?: string
   original_size?: number
   duration_seconds?: number
@@ -28,6 +34,30 @@ export type Attempt = {
   error_message?: string
   created_at: string
   submitted_at?: string
+}
+
+export type StudyStats = {
+  invites_total: number
+  participants_submitted: number
+  recordings_total: number
+  processing: number
+  quality_high: number
+  quality_review: number
+  quality_reject: number
+  review_pending: number
+  review_approved: number
+  review_rejected: number
+}
+
+export type AdminStudy = { study: Study; stats: StudyStats }
+
+export type AdminRecording = {
+  participant_code: string
+  invite_id: string
+  attempt: Attempt
+  reviewer_username?: string
+  quality_reasons: string[]
+  audio_variants: Array<'original' | 'normalized'>
 }
 
 export type Context = {
@@ -74,6 +104,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     throw new Error(await responseError(response, `请求失败 (${response.status})`))
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -120,12 +151,24 @@ export const api = {
     return response.json() as Promise<{ sequence: number; transcript: string; latency_ms: number }>
   },
   adminLogin: (username: string, password: string, otp: string) => request<{ username: string }>('/api/v1/admin/login', { method: 'POST', body: JSON.stringify({ username, password, otp: otp || undefined }) }),
+  adminSession: () => request<{ username: string }>('/api/v1/admin/session'),
+  adminLogout: () => request<void>('/api/v1/admin/session', { method: 'DELETE' }),
   adminDashboard: () => request<{ study: Study | null; total: number; submitted: number; processing: number }>('/api/v1/admin/dashboard'),
+  studies: (params = '') => request<{ items: AdminStudy[]; total: number }>(`/api/v1/admin/studies${params ? `?${params}` : ''}`),
+  study: (id: string) => request<AdminStudy>(`/api/v1/admin/studies/${id}`),
   createStudy: (body: Record<string, unknown>) => request<Study>('/api/v1/admin/studies', { method: 'POST', body: JSON.stringify(body) }),
+  updateStudy: (id: string, body: Record<string, unknown>) => request<Study>(`/api/v1/admin/studies/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   openStudy: (id: string) => request<Study>(`/api/v1/admin/studies/${id}/open`, { method: 'POST' }),
+  closeStudy: (id: string) => request<Study>(`/api/v1/admin/studies/${id}/close`, { method: 'POST' }),
+  archiveStudy: (id: string) => request<Study>(`/api/v1/admin/studies/${id}/archive`, { method: 'POST' }),
+  restoreStudy: (id: string) => request<Study>(`/api/v1/admin/studies/${id}/restore`, { method: 'POST' }),
   createInvites: (study_id: string, count: number) => request<Array<{ participant_code: string; url: string }>>('/api/v1/admin/invites/bulk', { method: 'POST', body: JSON.stringify({ study_id, count }) }),
   recordings: () => request<{ items: Array<{ participant_code: string; attempt: Attempt }> }>('/api/v1/admin/recordings'),
+  studyRecordings: (id: string, params = '') => request<{ items: AdminRecording[]; total: number }>(`/api/v1/admin/studies/${id}/recordings${params ? `?${params}` : ''}`),
   updateQc: (id: string, qc_status: string) => request<Attempt>(`/api/v1/admin/recordings/${id}/qc`, { method: 'PATCH', body: JSON.stringify({ qc_status }) }),
+  updateReview: (id: string, review_status: string, note?: string) => request<Attempt>(`/api/v1/admin/recordings/${id}/review`, { method: 'PATCH', body: JSON.stringify({ review_status, note }) }),
+  bulkReview: (attempt_ids: string[], review_status: string, note?: string) => request<{ updated: number }>('/api/v1/admin/recordings/review/bulk', { method: 'PATCH', body: JSON.stringify({ attempt_ids, review_status, note }) }),
+  audioUrl: (id: string, variant: 'original' | 'normalized') => `${API_BASE}/api/v1/admin/recordings/${id}/audio?variant=${variant}`,
   createExport: (study_id: string, variant = 'both') => request<{ id: string; state: string; variant: string }>('/api/v1/admin/exports', { method: 'POST', body: JSON.stringify({ study_id, variant }) }),
   exportStatus: (id: string) => request<{ id: string; state: string; download_url?: string; error_message?: string }>(`/api/v1/admin/exports/${id}`),
 }

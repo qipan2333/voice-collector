@@ -27,8 +27,32 @@ def extension_for_mime(mime: str | None) -> str:
     return MIME_EXTENSIONS.get(base, ".audio")
 
 
+def assess_recording_quality(
+    duration: float,
+    min_seconds: int,
+    max_seconds: int,
+    metrics: dict[str, Any],
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    if duration < min_seconds:
+        reasons.append("录音短于任务要求")
+    if duration > max_seconds:
+        reasons.append("录音长于任务要求")
+    mean_volume = metrics.get("mean_volume_db")
+    max_volume = metrics.get("max_volume_db")
+    if mean_volume is None or max_volume is None:
+        reasons.append("缺少音量指标")
+    else:
+        if float(mean_volume) < -45:
+            reasons.append("平均音量过低")
+        if float(max_volume) < -18:
+            reasons.append("峰值音量过低")
+    return ("review", reasons) if reasons else ("pass", [])
+
+
 def qc_status_for_duration(duration: float) -> str:
-    return "review" if duration < 120 or duration > 300 else "pass"
+    status, _ = assess_recording_quality(duration, 120, 300, {"mean_volume_db": -30, "max_volume_db": -3})
+    return status
 
 
 def sha256_file(path: Path) -> str:

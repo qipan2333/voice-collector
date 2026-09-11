@@ -5,10 +5,10 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .audio import extension_for_mime, move_original, normalize, probe, qc_status_for_duration, sha256_file, volume_metrics
+from .audio import assess_recording_quality, extension_for_mime, move_original, normalize, probe, sha256_file, volume_metrics
 from .config import get_settings
 from .db import SessionLocal
-from .models import Invite, ProcessingJob, RecordingAttempt, utcnow
+from .models import Invite, ProcessingJob, RecordingAttempt, Study, utcnow
 
 
 logging.basicConfig(level=logging.INFO)
@@ -49,7 +49,8 @@ def process_one() -> bool:
         job = db.get(ProcessingJob, job_id)
         attempt = db.get(RecordingAttempt, attempt_id)
         invite = db.get(Invite, attempt.invite_id) if attempt else None
-        if not job or not attempt or not invite:
+        study = db.get(Study, invite.study_id) if invite else None
+        if not job or not attempt or not invite or not study:
             return True
         source = settings.media_root / (attempt.original_path or "")
         if not source.is_file():
@@ -67,6 +68,10 @@ def process_one() -> bool:
         original_hash = sha256_file(original_path)
         normalized_hash = sha256_file(normalized_path)
         metrics = {**info, **volume_metrics(original_path)}
+        quality_status, quality_reasons = assess_recording_quality(
+            duration, study.min_seconds, study.max_seconds, metrics,
+        )
+        metrics["quality_reasons"] = quality_reasons
         attempt.original_path = str(original_path.relative_to(settings.media_root))
         attempt.normalized_path = str(normalized_path.relative_to(settings.media_root))
         attempt.original_sha256 = original_hash
@@ -75,7 +80,7 @@ def process_one() -> bool:
         attempt.sample_rate = info.get("sample_rate")
         attempt.channels = info.get("channels")
         attempt.qc_metrics = metrics
-        attempt.qc_status = qc_status_for_duration(duration)
+        attempt.auto_quality_status = quality_status
         attempt.state = "ready"
         attempt.error_message = None
         job.state = "done"
@@ -86,7 +91,8 @@ def process_one() -> bool:
     except Exception as exc:  # worker must turn failures into inspectable state
         logger.exception("failed attempt=%s", attempt.id)
         attempt.state = "failed"
-        attempt.qc_status = "reject"
+        attempt.auto_quality_status = "reject"
+        attempt.qc_metrics = {**(attempt.qc_metrics or {}), "quality_reasons": [str(exc)[:500]]}
         attempt.error_message = str(exc)[:2000]
         job.state = "failed"
         job.retries += 1
