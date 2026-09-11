@@ -27,6 +27,10 @@ def extension_for_mime(mime: str | None) -> str:
     return MIME_EXTENSIONS.get(base, ".audio")
 
 
+def qc_status_for_duration(duration: float) -> str:
+    return "review" if duration < 120 or duration > 300 else "pass"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:

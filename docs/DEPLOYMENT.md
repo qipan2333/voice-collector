@@ -35,8 +35,11 @@ MIMO_API_KEY=...
 MIMO_BASE_URL=https://api.xiaomimimo.com/v1
 MIMO_ASR_MODEL=mimo-v2.5-asr
 MIMO_ASR_RPM_LIMIT=90
+MIMO_ASR_PARTICIPANT_INTERVAL_SECONDS=7.5
 MIMO_REQUIRED_CONSENT_VERSION=consent-v2-mimo-asr
 ```
+
+本地声音活动检测始终用于即时跟读。配置 MiMo 后，服务端默认限制同一参与者至少间隔 7.5 秒调用一次 ASR，前端会按约 8 秒的窗口进行位置校准；该默认值适合少量参与者同时跟读。
 
 ## 网络暴露
 

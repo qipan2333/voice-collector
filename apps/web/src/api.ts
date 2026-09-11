@@ -35,7 +35,34 @@ export type Context = {
   study: Study
   consent_confirmed: boolean
   follow_along_enabled: boolean
+  follow_along_interval_seconds: number
   attempts: Attempt[]
+}
+
+type ApiErrorDetail = string | Array<{ loc?: Array<string | number>; msg?: string }> | { message?: string; msg?: string }
+
+export function formatApiError(body: unknown, fallback: string): string {
+  if (!body || typeof body !== 'object') return fallback
+  const payload = body as { detail?: ApiErrorDetail; message?: string }
+  const detail = payload.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => {
+      const location = item.loc?.filter((part) => part !== 'body').join('.')
+      return [location, item.msg].filter(Boolean).join(': ')
+    }).filter(Boolean)
+    if (messages.length) return messages.join('；')
+  }
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    if (typeof detail.message === 'string') return detail.message
+    if (typeof detail.msg === 'string') return detail.msg
+  }
+  return typeof payload.message === 'string' ? payload.message : fallback
+}
+
+async function responseError(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => ({}))
+  return formatApiError(body, fallback)
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -45,8 +72,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
   })
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { detail?: string }
-    throw new Error(body.detail ?? `请求失败 (${response.status})`)
+    throw new Error(await responseError(response, `请求失败 (${response.status})`))
   }
   return response.json() as Promise<T>
 }
@@ -65,7 +91,12 @@ export const api = {
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) onProgress?.(event.loaded / event.total)
       }
-      xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`上传失败 (${xhr.status})`))
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) return resolve()
+        let body: unknown = {}
+        try { body = JSON.parse(xhr.responseText) } catch { /* Use the status fallback for non-JSON responses. */ }
+        reject(new Error(formatApiError(body, `上传失败 (${xhr.status})`)))
+      }
       xhr.onerror = () => reject(new Error('网络连接中断'))
       xhr.send(blob)
     })
@@ -84,8 +115,7 @@ export const api = {
       body: blob,
     })
     if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as { detail?: string }
-      throw new Error(body.detail ?? `跟读识别失败 (${response.status})`)
+      throw new Error(await responseError(response, `跟读识别失败 (${response.status})`))
     }
     return response.json() as Promise<{ sequence: number; transcript: string; latency_ms: number }>
   },

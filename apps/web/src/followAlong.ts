@@ -4,6 +4,12 @@ export type ReadingPhrase = {
   normalized: string
 }
 
+export type FollowProgressSnapshot = {
+  activePhrase: number
+  speaking: boolean
+  voicedSeconds: number
+}
+
 const BREAK_AFTER = /[，。！？；：,.!?;:\n]/
 
 export function normalizeReadingText(value: string): string {
@@ -83,6 +89,124 @@ export function alignTranscript(phrases: ReadingPhrase[], currentIndex: number, 
   const jump = best.end - currentIndex
   const requiredScore = jump > 8 ? 0.72 : 0.58
   return best.score >= requiredScore && best.end >= currentIndex ? best.end : currentIndex
+}
+
+export class FollowProgressTracker {
+  private readonly phraseEnds: number[]
+  private readonly totalCharacters: number
+  private readonly baseRate: number
+  private rate: number
+  private voicedSeconds = 0
+  private anchorVoicedSeconds = 0
+  private anchorCharacters = 0
+  private displayCharacters = 0
+  private confirmedPhrase = 0
+  private speaking = false
+  private silenceSeconds = 0
+
+  constructor(private readonly phrases: ReadingPhrase[], expectedSeconds: number) {
+    let total = 0
+    this.phraseEnds = phrases.map((phrase) => {
+      total += Math.max(1, phrase.normalized.length)
+      return total
+    })
+    this.totalCharacters = total
+    this.baseRate = total / Math.max(1, expectedSeconds)
+    this.rate = this.baseRate
+  }
+
+  addFrame(rms: number, durationSeconds: number): FollowProgressSnapshot {
+    const startsSpeaking = rms >= 0.018
+    const staysSpeaking = rms >= 0.012
+    if (startsSpeaking) {
+      this.speaking = true
+      this.silenceSeconds = 0
+    } else if (this.speaking && staysSpeaking) {
+      this.silenceSeconds = 0
+    } else if (this.speaking) {
+      this.silenceSeconds += durationSeconds
+      if (this.silenceSeconds >= 0.6) this.speaking = false
+    }
+
+    if (this.speaking) this.voicedSeconds += durationSeconds
+    const estimated = this.anchorCharacters + (this.voicedSeconds - this.anchorVoicedSeconds) * this.rate
+    this.displayCharacters = Math.min(this.totalCharacters, Math.max(this.displayCharacters, estimated))
+    return this.snapshot()
+  }
+
+  confirmPhrase(index: number): FollowProgressSnapshot {
+    if (!this.phrases.length) return this.snapshot()
+    const bounded = Math.max(this.confirmedPhrase, Math.min(index, this.phrases.length - 1))
+    const confirmedCharacters = this.phraseEnds[bounded]
+    const voiceDelta = this.voicedSeconds - this.anchorVoicedSeconds
+    const characterDelta = confirmedCharacters - this.anchorCharacters
+    if (voiceDelta >= 1 && characterDelta > 0) {
+      const observedRate = characterDelta / voiceDelta
+      const boundedRate = Math.min(this.baseRate * 2.2, Math.max(this.baseRate * 0.45, observedRate))
+      this.rate = this.rate * 0.65 + boundedRate * 0.35
+    }
+    this.confirmedPhrase = bounded
+    this.anchorCharacters = confirmedCharacters
+    this.anchorVoicedSeconds = this.voicedSeconds
+    this.displayCharacters = Math.max(this.displayCharacters, confirmedCharacters)
+    return this.snapshot()
+  }
+
+  private snapshot(): FollowProgressSnapshot {
+    let activePhrase = 0
+    while (activePhrase < this.phraseEnds.length - 1 && this.displayCharacters >= this.phraseEnds[activePhrase]) activePhrase += 1
+    return { activePhrase, speaking: this.speaking, voicedSeconds: this.voicedSeconds }
+  }
+}
+
+export class FollowAudioBuffer {
+  private chunks: Float32Array[] = []
+  private sampleRate = 0
+  private sampleCount = 0
+  private newSampleCount = 0
+
+  constructor(private readonly maxWindowSeconds: number) {}
+
+  push(data: Float32Array, sampleRate: number, countTowardInterval = true): void {
+    if (this.sampleRate && this.sampleRate !== sampleRate) this.clear()
+    this.sampleRate = sampleRate
+    const copy = new Float32Array(data)
+    this.chunks.push(copy)
+    this.sampleCount += copy.length
+    if (countTowardInterval) this.newSampleCount += copy.length
+    this.trimTo(Math.round(this.maxWindowSeconds * sampleRate))
+  }
+
+  takeReadyWindow(intervalSeconds: number): { chunks: Float32Array[]; sampleRate: number } | null {
+    if (!this.sampleRate || this.newSampleCount / this.sampleRate < intervalSeconds) return null
+    this.newSampleCount = 0
+    return { chunks: [...this.chunks], sampleRate: this.sampleRate }
+  }
+
+  isReady(intervalSeconds: number): boolean {
+    return Boolean(this.sampleRate && this.newSampleCount / this.sampleRate >= intervalSeconds)
+  }
+
+  clear(): void {
+    this.chunks = []
+    this.sampleRate = 0
+    this.sampleCount = 0
+    this.newSampleCount = 0
+  }
+
+  private trimTo(maxSamples: number): void {
+    if (this.sampleCount <= maxSamples) return
+    let remaining = maxSamples
+    const retained: Float32Array[] = []
+    for (let index = this.chunks.length - 1; index >= 0 && remaining > 0; index -= 1) {
+      const chunk = this.chunks[index]
+      const take = Math.min(remaining, chunk.length)
+      retained.unshift(take === chunk.length ? chunk : chunk.slice(chunk.length - take))
+      remaining -= take
+    }
+    this.chunks = retained
+    this.sampleCount = maxSamples
+  }
 }
 
 export function encodePcmWav(inputChunks: Float32Array[], sourceRate: number, targetRate = 16000): Blob {

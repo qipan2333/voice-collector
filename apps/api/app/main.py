@@ -97,7 +97,7 @@ async def _reserve_asr_request(participant_key: str) -> None:
         while _asr_global_requests and now - _asr_global_requests[0] >= 60:
             _asr_global_requests.popleft()
         last_request = _asr_participant_requests.get(participant_key)
-        if last_request is not None and now - last_request < 11.5:
+        if last_request is not None and now - last_request < settings.mimo_asr_participant_interval_seconds:
             raise HTTPException(status_code=429, detail="跟读识别请求过于频繁，请稍后继续")
         if len(_asr_global_requests) >= max(1, settings.mimo_asr_rpm_limit):
             raise HTTPException(status_code=429, detail="跟读识别繁忙，录音可继续进行")
@@ -353,6 +353,7 @@ def participant_context(participant_session: str | None = Cookie(default=None), 
     return ParticipantContext(
         participant_code=invite.participant_code, study=_study_to_out(study),
         consent_confirmed=bool(consent), follow_along_enabled=_follow_along_enabled(study),
+        follow_along_interval_seconds=max(2.0, settings.mimo_asr_participant_interval_seconds + 0.5),
         attempts=[_attempt_to_out(item) for item in attempts],
     )
 
@@ -427,7 +428,8 @@ def create_attempt(request: AttemptCreateRequest, participant_session: str | Non
     attempt = RecordingAttempt(
         id=str(uuid.uuid4()), invite_id=invite.id, attempt_no=count + 1,
         client_duration_seconds=request.client_duration_seconds,
-        browser_family=request.browser_family, os_family=request.os_family,
+        browser_family=request.browser_family[:100] if request.browser_family else None,
+        os_family=request.os_family[:100] if request.os_family else None,
         recorder_settings=request.recorder_settings,
     )
     db.add(attempt)

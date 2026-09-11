@@ -21,8 +21,8 @@ class ConsentRequest(BaseModel):
 
 class AttemptCreateRequest(BaseModel):
     client_duration_seconds: float | None = Field(default=None, ge=0, le=900)
-    browser_family: str | None = Field(default=None, max_length=100)
-    os_family: str | None = Field(default=None, max_length=100)
+    browser_family: str | None = Field(default=None, max_length=512)
+    os_family: str | None = Field(default=None, max_length=256)
     recorder_settings: dict[str, Any] | None = None
 
 
@@ -65,6 +65,7 @@ class ParticipantContext(BaseModel):
     study: StudyOut
     consent_confirmed: bool
     follow_along_enabled: bool = False
+    follow_along_interval_seconds: float = 8.0
     attempts: list[AttemptOut]
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .audio import move_original, normalize, probe, sha256_file, volume_metrics, extension_for_mime
+from .audio import extension_for_mime, move_original, normalize, probe, qc_status_for_duration, sha256_file, volume_metrics
 from .config import get_settings
 from .db import SessionLocal
 from .models import Invite, ProcessingJob, RecordingAttempt, utcnow
@@ -75,7 +75,7 @@ def process_one() -> bool:
         attempt.sample_rate = info.get("sample_rate")
         attempt.channels = info.get("channels")
         attempt.qc_metrics = metrics
-        attempt.qc_status = "review" if duration < 120 or duration > 300 else "pass"
+        attempt.qc_status = qc_status_for_duration(duration)
         attempt.state = "ready"
         attempt.error_message = None
         job.state = "done"

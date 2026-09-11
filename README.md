@@ -7,7 +7,7 @@
 - React/Vite 移动端学生页面和管理页面
 - FastAPI API、PostgreSQL 数据库
 - 邀请码会话、知情同意确认、录音上传与状态查询
-- 小米 MiMo ASR 分片识别、短语级跟读高亮和自动滚动
+- 本地声音活动驱动的跟读高亮、自动滚动和小米 MiMo ASR 位置校准
 - ffmpeg worker 的标准化入口
 - Docker Compose、Caddy、健康检查和本机备份脚本
 
@@ -32,7 +32,7 @@ docker compose -f ops/docker-compose.yml up -d --build
 
 学生端只放行微信和手机 QQ 内嵌浏览器，管理后台仍可使用桌面浏览器。麦克风权限要求 HTTPS；正式手机录音请使用带有效证书的 HTTPS 地址。前端兼容 `audio/mp4`、`audio/webm`、`audio/ogg`，并在没有 `MediaRecorder` 时使用 Web Audio PCM 录音兜底。
 
-跟读功能需要设置 `MIMO_API_KEY`，并为任务使用 `consent-v2-mimo-asr` 知情同意版本。录音期间会每 12–15 秒向服务端发送一个临时 WAV 分片用于定位；转写文本和分片不会写入数据库或导出包。未配置 MiMo、识别超时或限流时，完整录音仍会继续。当前学生端会限制为微信和手机 QQ 内嵌浏览器，管理后台不受此限制。
+跟读高亮首先由浏览器本地的声音活动和任务预计时长即时驱动，不依赖网络即可在朗读和停顿时推进或暂停。设置 `MIMO_API_KEY` 且任务使用 `consent-v2-mimo-asr` 知情同意版本后，录音期间还会约每 8 秒发送一个临时 WAV 窗口用于位置校准；转写文字和分片不会写入数据库或导出包。未配置 MiMo、识别超时或限流时，本地跟读和完整录音仍会继续。当前学生端会限制为微信和手机 QQ 内嵌浏览器，管理后台不受此限制。
 
 ## 生产部署提醒
 

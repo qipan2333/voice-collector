@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, Attempt, Context, Study } from './api'
-import { alignTranscript, encodePcmWav, segmentReadingText } from './followAlong'
+import { FollowAudioBuffer, FollowProgressTracker, alignTranscript, encodePcmWav, segmentReadingText } from './followAlong'
 import { detectHostApp } from './hostApp'
 
 type Screen = 'loading' | 'token' | 'student' | 'admin' | 'unsupported'
@@ -134,6 +134,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
   const [audioUrl, setAudioUrl] = useState('')
   const [progress, setProgress] = useState(0)
   const phrases = useMemo(() => segmentReadingText(context.study.text), [context.study.text])
+  const followInterval = Math.max(2, context.follow_along_interval_seconds || 8)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
   const chunks = useRef<Blob[]>([])
@@ -145,13 +146,14 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
   const phraseElements = useRef<Array<HTMLSpanElement | null>>([])
   const manualScrollUntil = useRef(0)
   const activePhraseRef = useRef(0)
-  const followChunks = useRef<Float32Array[]>([])
-  const followSampleCount = useRef(0)
-  const followSampleRate = useRef(0)
-  const followSilenceMs = useRef(0)
+  const confirmedPhraseRef = useRef(0)
+  const followProgress = useRef(new FollowProgressTracker(phrases, context.study.expected_seconds))
+  const followAudio = useRef(new FollowAudioBuffer(followInterval + 1))
   const followInFlight = useRef(false)
   const followSequence = useRef(0)
   const followSessionId = useRef('')
+  const followActive = useRef(false)
+  const followSpeaking = useRef(false)
 
   const currentAttempt = useMemo(() => context.attempts[context.attempts.length - 1], [context.attempts])
 
@@ -166,72 +168,66 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
 
   const resetFollowAlong = () => {
     activePhraseRef.current = 0
+    confirmedPhraseRef.current = 0
     setActivePhrase(0)
-    setFollowMessage(context.follow_along_enabled ? '跟读定位会在开始朗读后自动更新。' : '')
-    followChunks.current = []
-    followSampleCount.current = 0
-    followSampleRate.current = 0
-    followSilenceMs.current = 0
+    setFollowMessage('跟读会根据你的朗读自动移动。')
+    followProgress.current = new FollowProgressTracker(phrases, context.study.expected_seconds)
+    followAudio.current = new FollowAudioBuffer(followInterval + 1)
     followInFlight.current = false
     followSequence.current = 0
+    followActive.current = false
+    followSpeaking.current = false
     followSessionId.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     reader.current?.scrollTo({ top: 0 })
   }
 
-  const retainTail = (input: Float32Array[], sampleCount: number): Float32Array[] => {
-    const result: Float32Array[] = []
-    let remaining = sampleCount
-    for (let index = input.length - 1; index >= 0 && remaining > 0; index -= 1) {
-      const chunk = input[index]
-      const take = Math.min(remaining, chunk.length)
-      result.unshift(chunk.slice(chunk.length - take))
-      remaining -= take
-    }
-    return result
-  }
-
-  const flushFollowChunk = async (final = false) => {
-    if (!context.follow_along_enabled || followInFlight.current || !followSampleRate.current) return
-    const duration = followSampleCount.current / followSampleRate.current
-    if (duration < (final ? 1 : 12)) return
-    const input = followChunks.current
+  const flushFollowChunk = async () => {
+    if (!context.follow_along_enabled || !followActive.current || followInFlight.current) return
+    const input = followAudio.current.takeReadyWindow(followInterval)
+    if (!input) return
     const sequence = followSequence.current
-    const tailSamples = final ? 0 : Math.min(followSampleRate.current, followSampleCount.current)
-    followChunks.current = tailSamples ? retainTail(input, tailSamples) : []
-    followSampleCount.current = tailSamples
-    followSilenceMs.current = 0
     followSequence.current += 1
     followInFlight.current = true
-    setFollowMessage('正在根据朗读内容定位…')
+    setFollowMessage('正在校准朗读位置…')
     try {
-      const wav = encodePcmWav(input, followSampleRate.current)
+      const wav = encodePcmWav(input.chunks, input.sampleRate)
       const result = await api.transcribeChunk(followSessionId.current, sequence, wav)
-      if (result.transcript) {
-        const next = alignTranscript(phrases, activePhraseRef.current, result.transcript)
-        if (next > activePhraseRef.current) {
-          activePhraseRef.current = next
-          setActivePhrase(next)
-          window.requestAnimationFrame(() => scrollToPhrase(next))
+      if (followActive.current && result.transcript) {
+        const next = alignTranscript(phrases, confirmedPhraseRef.current, result.transcript)
+        if (next > confirmedPhraseRef.current) {
+          confirmedPhraseRef.current = next
+          const snapshot = followProgress.current.confirmPhrase(next)
+          if (snapshot.activePhrase > activePhraseRef.current) {
+            activePhraseRef.current = snapshot.activePhrase
+            setActivePhrase(snapshot.activePhrase)
+            window.requestAnimationFrame(() => scrollToPhrase(snapshot.activePhrase))
+          }
         }
-        setFollowMessage(next > 0 ? '跟读定位中' : '正在识别开头内容…')
+        setFollowMessage('正在跟随朗读')
       }
     } catch (error) {
-      setFollowMessage(`${error instanceof Error ? error.message : '跟读识别暂时不可用'}；录音仍在继续。`)
+      if (followActive.current) setFollowMessage('正在本地跟随；云端校准暂时不可用。')
     } finally {
       followInFlight.current = false
+      if (followActive.current && followAudio.current.isReady(followInterval)) void flushFollowChunk()
     }
   }
 
   const collectFollowFrame = (data: Float32Array, sampleRate: number, rms: number) => {
+    if (!followActive.current) return
+    const snapshot = followProgress.current.addFrame(rms, data.length / sampleRate)
+    if (snapshot.activePhrase > activePhraseRef.current) {
+      activePhraseRef.current = snapshot.activePhrase
+      setActivePhrase(snapshot.activePhrase)
+      window.requestAnimationFrame(() => scrollToPhrase(snapshot.activePhrase))
+    }
+    if (snapshot.speaking !== followSpeaking.current) {
+      followSpeaking.current = snapshot.speaking
+      setFollowMessage(snapshot.speaking ? '正在跟随朗读' : '等待继续朗读…')
+    }
     if (!context.follow_along_enabled) return
-    const copy = new Float32Array(data)
-    followChunks.current.push(copy)
-    followSampleCount.current += copy.length
-    followSampleRate.current = sampleRate
-    const frameMs = copy.length / sampleRate * 1000
-    followSilenceMs.current = rms < 0.018 ? followSilenceMs.current + frameMs : 0
-    const duration = followSampleCount.current / sampleRate
-    if (duration >= 15 || (duration >= 12 && followSilenceMs.current >= 450)) void flushFollowChunk()
+    followAudio.current.push(data, sampleRate, snapshot.speaking)
+    if (followAudio.current.isReady(followInterval)) void flushFollowChunk()
   }
 
   const stopStream = () => {
@@ -253,6 +249,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
 
   const cleanup = useCallback(() => {
     if (timer.current) window.clearInterval(timer.current)
+    followActive.current = false
     stopStream()
   }, [])
 
@@ -319,6 +316,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
       if (!window.isSecureContext) throw new Error('当前地址不是 HTTPS 安全页面，浏览器不会开放麦克风。')
       const input = await requestMicrophone()
       stream.current = input
+      followActive.current = true
       if (typeof MediaRecorder === 'undefined') {
         await startPcmFallback(input)
         return
@@ -371,7 +369,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
   }
 
   const stopRecording = () => {
-    void flushFollowChunk(true)
+    followActive.current = false
     if (mediaRecorder.current?.state === 'recording') mediaRecorder.current.stop()
     else if (pcmCapture.current) finishPcmRecording()
   }
@@ -380,7 +378,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
     if (!blob) return
     setRecorderState('uploading'); setProgress(0); setMessage('正在安全上传录音…')
     try {
-      const attempt = await api.createAttempt({ client_duration_seconds: elapsed, browser_family: navigator.userAgent.slice(0, 120), os_family: navigator.platform, recorder_settings: { ...recorderSettings.current, blobType: blob.type } })
+      const attempt = await api.createAttempt({ client_duration_seconds: elapsed, browser_family: detectHostApp(navigator.userAgent), os_family: navigator.platform.slice(0, 100), recorder_settings: { ...recorderSettings.current, blobType: blob.type } })
       await api.uploadAttempt(attempt.id, blob, setProgress)
       await api.finalize(attempt.id)
       setRecorderState('processing'); setMessage('录音已收到，正在进行格式检查…')

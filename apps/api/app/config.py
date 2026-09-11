@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     mimo_base_url: str = "https://api.xiaomimimo.com/v1"
     mimo_asr_model: str = "mimo-v2.5-asr"
     mimo_asr_rpm_limit: int = 90
+    mimo_asr_participant_interval_seconds: float = 7.5
     mimo_required_consent_version: str = "consent-v2-mimo-asr"
     mimo_asr_timeout_seconds: float = 20.0
 

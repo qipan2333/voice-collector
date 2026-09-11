@@ -34,6 +34,7 @@ services:
       MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
       MIMO_ASR_MODEL: ${MIMO_ASR_MODEL:-mimo-v2.5-asr}
       MIMO_ASR_RPM_LIMIT: ${MIMO_ASR_RPM_LIMIT:-90}
+      MIMO_ASR_PARTICIPANT_INTERVAL_SECONDS: ${MIMO_ASR_PARTICIPANT_INTERVAL_SECONDS:-7.5}
       MIMO_REQUIRED_CONSENT_VERSION: ${MIMO_REQUIRED_CONSENT_VERSION:-consent-v2-mimo-asr}
     volumes:
       - ../data:/srv/voice-collector
@@ -67,6 +68,7 @@ services:
       MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
       MIMO_ASR_MODEL: ${MIMO_ASR_MODEL:-mimo-v2.5-asr}
       MIMO_ASR_RPM_LIMIT: ${MIMO_ASR_RPM_LIMIT:-90}
+      MIMO_ASR_PARTICIPANT_INTERVAL_SECONDS: ${MIMO_ASR_PARTICIPANT_INTERVAL_SECONDS:-7.5}
       MIMO_REQUIRED_CONSENT_VERSION: ${MIMO_REQUIRED_CONSENT_VERSION:-consent-v2-mimo-asr}
     volumes:
       - ../data:/srv/voice-collector
