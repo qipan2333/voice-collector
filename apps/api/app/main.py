@@ -423,7 +423,7 @@ def participant_context(participant_session: str | None = Cookie(default=None), 
     consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.confirmed.is_(True)))
     attempts = db.scalars(select(RecordingAttempt).where(RecordingAttempt.invite_id == invite.id).order_by(RecordingAttempt.attempt_no)).all()
     return ParticipantContext(
-        participant_code=invite.participant_code, study=_study_to_out(study),
+        participant_code=invite.participant_code, invite_status=invite.status, study=_study_to_out(study),
         consent_confirmed=bool(consent), follow_along_enabled=_follow_along_enabled(study),
         follow_along_interval_seconds=max(2.0, settings.mimo_asr_participant_interval_seconds + 0.5),
         attempts=[_attempt_to_out(item) for item in attempts],

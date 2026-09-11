@@ -68,6 +68,7 @@ class AttemptOut(BaseModel):
 
 class ParticipantContext(BaseModel):
     participant_code: str
+    invite_status: str
     study: StudyOut
     consent_confirmed: bool
     follow_along_enabled: bool = False

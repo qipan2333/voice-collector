@@ -61,6 +61,11 @@ def test_study_statistics_and_recordings_are_isolated():
         assert recordings["items"][0]["invite_status"] == "submitted"
         assert recordings["items"][0]["invite_attempt_count"] == 1
         assert client.get("/api/v1/admin/studies/study-2/recordings").json()["total"] == 0
+
+        client.cookies.set("participant_session", "participant-session-token")
+        context = client.get("/api/v1/participant/context")
+        assert context.status_code == 200
+        assert context.json()["invite_status"] == "submitted"
     finally:
         app.dependency_overrides.clear()
         db.close()

@@ -241,9 +241,10 @@ export function AdminApp() {
   const [playingId, setPlayingId] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingIds, setReviewingIds] = useState<string[]>([]);
+  const [reopeningInviteIds, setReopeningInviteIds] = useState<string[]>([]);
   const [reviewNotice, setReviewNotice] = useState<{
     message: string;
-    kind: "approved" | "rejected" | "pending";
+    kind: "approved" | "rejected" | "pending" | "reopened";
   } | null>(null);
   const [recentlyReviewedIds, setRecentlyReviewedIds] = useState<string[]>([]);
   const [inviteCount, setInviteCount] = useState(100);
@@ -938,6 +939,11 @@ export function AdminApp() {
                                   <small>
                                     第 {attempt.attempt_no} 次 · {attempt.state}
                                   </small>
+                                  {item.invite_status === "reopened" && (
+                                    <small className="reopened-label">
+                                      已允许再次录音
+                                    </small>
+                                  )}
                                 </td>
                                 <td>
                                   {formatSeconds(
@@ -1030,7 +1036,10 @@ export function AdminApp() {
                                       className="icon-button"
                                       disabled={
                                         detail.study.status !== "open" ||
-                                        item.invite_attempt_count >= 3
+                                        item.invite_attempt_count >= 3 ||
+                                        reopeningInviteIds.includes(
+                                          item.invite_id,
+                                        )
                                       }
                                       title={
                                         item.invite_attempt_count >= 3
@@ -1041,10 +1050,29 @@ export function AdminApp() {
                                       }
                                       onClick={async () => {
                                         setError("");
+                                        setReopeningInviteIds((current) => [
+                                          ...current,
+                                          item.invite_id,
+                                        ]);
                                         try {
                                           await api.reopenInvite(
                                             item.invite_id,
                                           );
+                                          setRecordings((current) =>
+                                            current.map((recording) =>
+                                              recording.invite_id ===
+                                              item.invite_id
+                                                ? {
+                                                    ...recording,
+                                                    invite_status: "reopened",
+                                                  }
+                                                : recording,
+                                            ),
+                                          );
+                                          setReviewNotice({
+                                            kind: "reopened",
+                                            message: `${item.participant_code} 已允许再次录音`,
+                                          });
                                           await refreshSelected();
                                         } catch (reason) {
                                           setError(
@@ -1052,10 +1080,25 @@ export function AdminApp() {
                                               ? reason.message
                                               : "重开失败",
                                           );
+                                        } finally {
+                                          setReopeningInviteIds((current) =>
+                                            current.filter(
+                                              (id) => id !== item.invite_id,
+                                            ),
+                                          );
                                         }
                                       }}
                                     >
-                                      <RotateCcw size={17} />
+                                      {reopeningInviteIds.includes(
+                                        item.invite_id,
+                                      ) ? (
+                                        <LoaderCircle
+                                          className="spin"
+                                          size={17}
+                                        />
+                                      ) : (
+                                        <RotateCcw size={17} />
+                                      )}
                                     </button>
                                   </div>
                                 </td>

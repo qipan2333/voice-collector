@@ -64,6 +64,7 @@ export type AdminRecording = {
 
 export type Context = {
   participant_code: string;
+  invite_status: string;
   study: Study;
   consent_confirmed: boolean;
   follow_along_enabled: boolean;

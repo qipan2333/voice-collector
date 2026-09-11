@@ -115,7 +115,7 @@ function TokenEntry({ onSubmit }: { onSubmit: (token: string) => void }) {
 
 function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () => Promise<void> }) {
   const [consent, setConsent] = useState(context.consent_confirmed)
-  const [recorderState, setRecorderState] = useState<RecorderState>(context.attempts.some((item) => item.state === 'ready' || item.state === 'processing' || item.state === 'queued') ? 'submitted' : 'idle')
+  const [recorderState, setRecorderState] = useState<RecorderState>(context.invite_status !== 'reopened' && context.attempts.some((item) => item.state === 'ready' || item.state === 'processing' || item.state === 'queued') ? 'submitted' : 'idle')
   const [message, setMessage] = useState('')
   const [followMessage, setFollowMessage] = useState('')
   const [activePhrase, setActivePhrase] = useState(0)
