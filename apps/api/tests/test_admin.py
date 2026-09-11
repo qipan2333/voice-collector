@@ -58,6 +58,8 @@ def test_study_statistics_and_recordings_are_isolated():
         recordings = client.get("/api/v1/admin/studies/study-1/recordings").json()
         assert recordings["total"] == 1
         assert recordings["items"][0]["participant_code"] == "P001"
+        assert recordings["items"][0]["invite_status"] == "submitted"
+        assert recordings["items"][0]["invite_attempt_count"] == 1
         assert client.get("/api/v1/admin/studies/study-2/recordings").json()["total"] == 0
     finally:
         app.dependency_overrides.clear()
@@ -76,7 +78,12 @@ def test_review_and_task_lifecycle():
         assert bulk.status_code == 200
         assert bulk.json() == {"updated": 1}
 
+        reopened = client.post("/api/v1/admin/invites/invite-1/reopen")
+        assert reopened.status_code == 200
+        assert reopened.json() == {"status": "reopened"}
+
         assert client.post("/api/v1/admin/studies/study-1/close").json()["status"] == "closed"
+        assert client.post("/api/v1/admin/invites/invite-1/reopen").status_code == 409
         client.cookies.set("participant_session", participant_token)
         blocked = client.post("/api/v1/participant/attempts", json={"client_duration_seconds": 30})
         assert blocked.status_code == 409

@@ -134,6 +134,8 @@ class AdminStudyOut(BaseModel):
 class AdminRecordingOut(BaseModel):
     participant_code: str
     invite_id: str
+    invite_status: str
+    invite_attempt_count: int
     attempt: AttemptOut
     reviewer_username: str | None = None
     quality_reasons: list[str] = Field(default_factory=list)

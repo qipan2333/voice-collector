@@ -99,6 +99,11 @@ footer { margin-top: auto; color: #9aa2b2; text-align: center; font-size: 12px; 
 .admin-content { grid-area: 2 / 2; min-width: 0; padding: 24px 28px 40px; overflow-x: hidden; }
 .admin-error { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; padding: 10px 12px; color: #9d3144; background: #fff0f2; border: 1px solid #f0cbd2; border-radius: 6px; font-size: 13px; }
 .admin-error button { display: grid; place-items: center; padding: 2px; color: inherit; background: transparent; }
+.review-toast { position: fixed; z-index: 30; top: 72px; right: 22px; min-width: 280px; max-width: min(420px,calc(100vw - 28px)); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 13px 14px; color: #245f46; background: #f0faf4; border: 1px solid #acd8be; border-radius: 6px; box-shadow: 0 14px 36px rgba(25,43,34,.18); animation: review-toast-in .18s ease-out; }
+.review-toast.rejected { color: #943447; background: #fff3f5; border-color: #e8b5bf; }
+.review-toast.pending { color: #705d25; background: #fff9e8; border-color: #e7d69b; }
+.review-toast button { display: grid; place-items: center; padding: 3px; color: inherit; background: transparent; }
+.review-toast strong { font-size: 13px; }
 .admin-empty { min-height: 60vh; display: grid; place-content: center; justify-items: center; color: #6f7b8a; text-align: center; }
 .admin-empty h2 { color: #273445; }
 .admin-empty .primary, .study-actions button, .distribution-grid button, .bulk-toolbar button, .inline-player button, .inline-player a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
@@ -148,6 +153,9 @@ footer { margin-top: auto; color: #9aa2b2; text-align: center; font-size: 12px; 
 .recording-table th { padding: 10px 12px; color: #687587; text-align: left; background: #f2f5f7; border-bottom: 1px solid #dce2e8; font-size: 11px; font-weight: 700; }
 .recording-table td { padding: 11px 12px; vertical-align: top; border-bottom: 1px solid #e6eaee; }
 .recording-table tbody tr:last-child td { border-bottom: 0; }
+.recording-table tbody tr.review-updated td { animation: review-row-approved 1.8s ease-out; }
+.recording-table tbody tr.review-updated.rejected td { animation-name: review-row-rejected; }
+.recording-table tbody tr.review-updated.pending td { animation-name: review-row-pending; }
 .recording-table input[type="checkbox"] { width: 16px; height: 16px; margin: 1px 0; accent-color: #286f9a; }
 .recording-table td > strong { display: block; margin-bottom: 4px; }
 .recording-table td small { max-width: 210px; margin-top: 4px; white-space: normal; }
@@ -155,6 +163,7 @@ footer { margin-top: auto; color: #9aa2b2; text-align: center; font-size: 12px; 
 .row-actions .icon-button { width: 31px; height: 31px; }
 .row-actions .approve { color: #287353; }
 .row-actions .reject { color: #aa4052; }
+.spin { animation: spin .7s linear infinite; }
 .player-row td { padding: 0; background: #f8fafb; }
 .inline-player { display: grid; grid-template-columns: minmax(260px,1fr) minmax(180px,.6fr) auto; align-items: center; gap: 12px; padding: 14px 18px; }
 .inline-player audio { width: 100%; height: 38px; }
@@ -180,9 +189,14 @@ footer { margin-top: auto; color: #9aa2b2; text-align: center; font-size: 12px; 
 .modal-actions { justify-content: flex-end; margin-top: 16px; }
 .modal-actions button { border-radius: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes review-toast-in { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes review-row-approved { 0%,35% { background: #e5f5eb; } 100% { background: transparent; } }
+@keyframes review-row-rejected { 0%,35% { background: #fde8ec; } 100% { background: transparent; } }
+@keyframes review-row-pending { 0%,35% { background: #fff4d7; } 100% { background: transparent; } }
 @media (max-width: 760px) { .shell { padding: 18px 14px 30px; } .hero-card, .panel { padding: 22px 18px; border-radius: 8px; } .reading-text { max-height: 52vh; margin: 18px 0; padding: 18px 16px 35vh; } .admin-grid { grid-template-columns: 1fr; } .stats { gap: 8px; } .stats > div { padding: 14px 12px; } .stats strong { font-size: 25px; } .recording-row { align-items: flex-start; } .recording-row select { max-width: 110px; }
   .admin-workbench { min-width: 0; display: block; }
   .admin-global-header { height: 56px; }
+  .review-toast { top: 66px; right: 14px; left: 14px; min-width: 0; max-width: none; }
   .task-sidebar { padding: 12px; border-right: 0; border-bottom: 1px solid #dde3e8; }
   .task-list { display: flex; overflow-x: auto; }
   .task-item { min-width: 230px; }

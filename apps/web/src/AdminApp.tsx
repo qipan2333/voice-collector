@@ -4,6 +4,7 @@ import {
   Check,
   Download,
   FileDown,
+  LoaderCircle,
   LogOut,
   Pencil,
   Play,
@@ -239,6 +240,12 @@ export function AdminApp() {
   const [selectedAttempts, setSelectedAttempts] = useState<string[]>([]);
   const [playingId, setPlayingId] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [reviewingIds, setReviewingIds] = useState<string[]>([]);
+  const [reviewNotice, setReviewNotice] = useState<{
+    message: string;
+    kind: "approved" | "rejected" | "pending";
+  } | null>(null);
+  const [recentlyReviewedIds, setRecentlyReviewedIds] = useState<string[]>([]);
   const [inviteCount, setInviteCount] = useState(100);
   const [exportMessage, setExportMessage] = useState("");
 
@@ -326,6 +333,11 @@ export function AdminApp() {
     if (authState === "ready" && selectedId)
       loadRecordings(selectedId).catch((reason) => setError(reason.message));
   }, [authState, loadRecordings, selectedId]);
+  useEffect(() => {
+    if (!reviewNotice) return;
+    const timer = window.setTimeout(() => setReviewNotice(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [reviewNotice]);
 
   function selectTask(id: string) {
     setSelectedId(id);
@@ -357,13 +369,43 @@ export function AdminApp() {
   ) {
     if (!ids.length) return;
     setError("");
+    setReviewingIds(ids);
     try {
       if (ids.length === 1)
         await api.updateReview(ids[0], status, reviewNotes[ids[0]]);
       else await api.bulkReview(ids, status);
+      setRecordings((current) =>
+        current.map((item) =>
+          ids.includes(item.attempt.id)
+            ? { ...item, attempt: { ...item.attempt, review_status: status } }
+            : item,
+        ),
+      );
+      setRecentlyReviewedIds(ids);
+      window.setTimeout(() => setRecentlyReviewedIds([]), 1800);
+      const action =
+        status === "approved"
+          ? "审核通过"
+          : status === "rejected"
+            ? "审核拒绝"
+            : "重置为待审核";
+      const participant =
+        ids.length === 1
+          ? recordings.find((item) => item.attempt.id === ids[0])
+              ?.participant_code
+          : null;
+      setReviewNotice({
+        kind: status,
+        message:
+          ids.length === 1
+            ? `${participant ?? "该录音"} 已${action}`
+            : `${ids.length} 条录音已${action}`,
+      });
       await refreshSelected();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "审核失败");
+    } finally {
+      setReviewingIds([]);
     }
   }
 
@@ -432,6 +474,25 @@ export function AdminApp() {
 
   return (
     <main className="admin-workbench">
+      {reviewNotice && (
+        <div
+          className={`review-toast ${reviewNotice.kind}`}
+          role="status"
+          aria-live="polite"
+        >
+          {reviewNotice.kind === "approved" ? (
+            <Check size={19} />
+          ) : reviewNotice.kind === "rejected" ? (
+            <X size={19} />
+          ) : (
+            <RotateCcw size={19} />
+          )}
+          <strong>{reviewNotice.message}</strong>
+          <button title="关闭提示" onClick={() => setReviewNotice(null)}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
       <header className="admin-global-header">
         <div>
           <span className="admin-kicker">VOICE COLLECTOR</span>
@@ -782,18 +843,23 @@ export function AdminApp() {
                   <div className="bulk-toolbar">
                     <strong>已选择 {selectedAttempts.length} 条</strong>
                     <button
+                      disabled={reviewingIds.length > 0}
                       onClick={() => review(selectedAttempts, "approved")}
                     >
                       <Check size={16} />
                       批量通过
                     </button>
                     <button
+                      disabled={reviewingIds.length > 0}
                       onClick={() => review(selectedAttempts, "rejected")}
                     >
                       <X size={16} />
                       批量拒绝
                     </button>
-                    <button onClick={() => review(selectedAttempts, "pending")}>
+                    <button
+                      disabled={reviewingIds.length > 0}
+                      onClick={() => review(selectedAttempts, "pending")}
+                    >
                       <RotateCcw size={16} />
                       重置待审核
                     </button>
@@ -843,7 +909,13 @@ export function AdminApp() {
                             : "original";
                           return (
                             <Fragment key={attempt.id}>
-                              <tr>
+                              <tr
+                                className={
+                                  recentlyReviewedIds.includes(attempt.id)
+                                    ? `review-updated ${attempt.review_status}`
+                                    : undefined
+                                }
+                              >
                                 <td>
                                   <input
                                     type="checkbox"
@@ -918,21 +990,72 @@ export function AdminApp() {
                                     </button>
                                     <button
                                       className="icon-button approve"
+                                      disabled={reviewingIds.includes(
+                                        attempt.id,
+                                      )}
                                       title="审核通过"
                                       onClick={() =>
                                         review([attempt.id], "approved")
                                       }
                                     >
-                                      <Check size={17} />
+                                      {reviewingIds.includes(attempt.id) ? (
+                                        <LoaderCircle
+                                          className="spin"
+                                          size={17}
+                                        />
+                                      ) : (
+                                        <Check size={17} />
+                                      )}
                                     </button>
                                     <button
                                       className="icon-button reject"
+                                      disabled={reviewingIds.includes(
+                                        attempt.id,
+                                      )}
                                       title="审核拒绝"
                                       onClick={() =>
                                         review([attempt.id], "rejected")
                                       }
                                     >
-                                      <X size={17} />
+                                      {reviewingIds.includes(attempt.id) ? (
+                                        <LoaderCircle
+                                          className="spin"
+                                          size={17}
+                                        />
+                                      ) : (
+                                        <X size={17} />
+                                      )}
+                                    </button>
+                                    <button
+                                      className="icon-button"
+                                      disabled={
+                                        detail.study.status !== "open" ||
+                                        item.invite_attempt_count >= 3
+                                      }
+                                      title={
+                                        item.invite_attempt_count >= 3
+                                          ? "已达到最多 3 次录音"
+                                          : detail.study.status !== "open"
+                                            ? "任务开放后才能允许重录"
+                                            : "允许该参与者再次录音"
+                                      }
+                                      onClick={async () => {
+                                        setError("");
+                                        try {
+                                          await api.reopenInvite(
+                                            item.invite_id,
+                                          );
+                                          await refreshSelected();
+                                        } catch (reason) {
+                                          setError(
+                                            reason instanceof Error
+                                              ? reason.message
+                                              : "重开失败",
+                                          );
+                                        }
+                                      }}
+                                    >
+                                      <RotateCcw size={17} />
                                     </button>
                                   </div>
                                 </td>
@@ -976,6 +1099,9 @@ export function AdminApp() {
                                           </a>
                                         )}
                                         <button
+                                          disabled={reviewingIds.includes(
+                                            attempt.id,
+                                          )}
                                           onClick={() =>
                                             review([attempt.id], "approved")
                                           }
@@ -984,6 +1110,9 @@ export function AdminApp() {
                                           通过
                                         </button>
                                         <button
+                                          disabled={reviewingIds.includes(
+                                            attempt.id,
+                                          )}
                                           onClick={() =>
                                             review([attempt.id], "rejected")
                                           }

@@ -130,7 +130,12 @@ def _study_stats_map(db: Session, study_ids: list[str]) -> dict[str, StudyStatsO
     return result
 
 
-def _admin_recording_out(db: Session, attempt: RecordingAttempt, invite: Invite) -> AdminRecordingOut:
+def _admin_recording_out(
+    db: Session,
+    attempt: RecordingAttempt,
+    invite: Invite,
+    invite_attempt_count: int,
+) -> AdminRecordingOut:
     reviewer = db.get(AdminUser, attempt.reviewed_by) if attempt.reviewed_by else None
     metrics = attempt.qc_metrics or {}
     reasons = metrics.get("quality_reasons")
@@ -142,6 +147,8 @@ def _admin_recording_out(db: Session, attempt: RecordingAttempt, invite: Invite)
     return AdminRecordingOut(
         participant_code=invite.participant_code,
         invite_id=invite.id,
+        invite_status=invite.status,
+        invite_attempt_count=invite_attempt_count,
         attempt=_attempt_to_out(attempt),
         reviewer_username=reviewer.username if reviewer else None,
         quality_reasons=[str(item) for item in reasons] if isinstance(reasons, list) else [],
@@ -782,7 +789,19 @@ def list_study_recordings(
     rows = db.execute(
         statement.order_by(RecordingAttempt.created_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200))
     ).all()
-    return {"items": [_admin_recording_out(db, attempt, invite).model_dump() for attempt, invite in rows], "total": total}
+    invite_ids = list({invite.id for _, invite in rows})
+    attempt_counts = dict(db.execute(
+        select(RecordingAttempt.invite_id, func.count(RecordingAttempt.id))
+        .where(RecordingAttempt.invite_id.in_(invite_ids))
+        .group_by(RecordingAttempt.invite_id)
+    ).all()) if invite_ids else {}
+    return {
+        "items": [
+            _admin_recording_out(db, attempt, invite, attempt_counts.get(invite.id, 0)).model_dump()
+            for attempt, invite in rows
+        ],
+        "total": total,
+    }
 
 
 @app.get("/api/v1/admin/recordings/{attempt_id}/audio")
@@ -806,6 +825,12 @@ def reopen_invite(invite_id: str, admin_session: str | None = Cookie(default=Non
     invite = db.get(Invite, invite_id)
     if not invite:
         raise HTTPException(status_code=404, detail="邀请码不存在")
+    study = db.get(Study, invite.study_id)
+    if not study or study.status != "open":
+        raise HTTPException(status_code=409, detail="只有开放中的任务可以允许重录")
+    attempt_count = db.scalar(select(func.count(RecordingAttempt.id)).where(RecordingAttempt.invite_id == invite.id)) or 0
+    if attempt_count >= 3:
+        raise HTTPException(status_code=409, detail="该邀请码已达到最大录音次数")
     invite.status = "reopened"
     invite.submitted_at = None
     _audit(db, "invite_reopened", "admin", user.id, "invite", invite.id)
