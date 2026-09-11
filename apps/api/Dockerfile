@@ -3,7 +3,11 @@ FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update \
+RUN sed -i \
+      -e 's|deb.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' \
+      -e 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g' \
+      /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
