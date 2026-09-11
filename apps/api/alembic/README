@@ -1,0 +1,3 @@
+Use `alembic revision --autogenerate -m "describe change"` after changing models,
+then run `alembic upgrade head` before starting the production API.
+

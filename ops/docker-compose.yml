@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: voice_collector
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voice}
+    volumes:
+      - ../postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voice -d voice_collector"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../apps/api
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_SECRET: ${APP_SECRET}
+      DATABASE_URL: postgresql+psycopg://voice:${POSTGRES_PASSWORD:-voice}@db:5432/voice_collector
+      MEDIA_ROOT: /srv/voice-collector/recordings
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
+      MAX_RECORDING_SECONDS: ${MAX_RECORDING_SECONDS:-480}
+      EXPECTED_RECORDING_SECONDS: ${EXPECTED_RECORDING_SECONDS:-180}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-researcher}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_TOTP_SECRET: ${ADMIN_TOTP_SECRET:-}
+      MIMO_API_KEY: ${MIMO_API_KEY:-}
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      MIMO_ASR_MODEL: ${MIMO_ASR_MODEL:-mimo-v2.5-asr}
+      MIMO_ASR_RPM_LIMIT: ${MIMO_ASR_RPM_LIMIT:-90}
+      MIMO_REQUIRED_CONSENT_VERSION: ${MIMO_REQUIRED_CONSENT_VERSION:-consent-v2-mimo-asr}
+    volumes:
+      - ../data:/srv/voice-collector
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: ../apps/api
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_SECRET: ${APP_SECRET}
+      DATABASE_URL: postgresql+psycopg://voice:${POSTGRES_PASSWORD:-voice}@db:5432/voice_collector
+      MEDIA_ROOT: /srv/voice-collector/recordings
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
+      MAX_RECORDING_SECONDS: ${MAX_RECORDING_SECONDS:-480}
+      EXPECTED_RECORDING_SECONDS: ${EXPECTED_RECORDING_SECONDS:-180}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-researcher}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_TOTP_SECRET: ${ADMIN_TOTP_SECRET:-}
+      MIMO_API_KEY: ${MIMO_API_KEY:-}
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      MIMO_ASR_MODEL: ${MIMO_ASR_MODEL:-mimo-v2.5-asr}
+      MIMO_ASR_RPM_LIMIT: ${MIMO_ASR_RPM_LIMIT:-90}
+      MIMO_REQUIRED_CONSENT_VERSION: ${MIMO_REQUIRED_CONSENT_VERSION:-consent-v2-mimo-asr}
+    volumes:
+      - ../data:/srv/voice-collector
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy

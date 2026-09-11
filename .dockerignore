@@ -1,0 +1,17 @@
+.git
+.env
+.venv
+node_modules
+**/node_modules
+**/dist
+**/__pycache__
+**/.pytest_cache
+postgres-data
+data
+backups
+ops/caddy-data
+ops/caddy-config
+ops/caddy-logs
+*.sqlite3
+*.tsbuildinfo
+
