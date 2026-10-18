@@ -18,7 +18,7 @@
     }
 
     header {
-        Permissions-Policy "microphone=(self)"
+        Permissions-Policy "microphone=(self), screen-wake-lock=(self)"
         X-Content-Type-Options "nosniff"
         Referrer-Policy "no-referrer"
         X-Frame-Options "DENY"

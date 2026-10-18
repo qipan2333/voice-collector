@@ -4,6 +4,7 @@ import { CONSENT_TEXT, MIN_RECORDING_SECONDS } from './experiment'
 import { AdminApp as AdminWorkbench } from './AdminApp'
 import { FollowAudioBuffer, FollowProgressTracker, alignTranscript, encodePcmWav, segmentReadingText } from './followAlong'
 import { detectHostApp } from './hostApp'
+import { browserWakeEnvironment, keepScreenAwake, type ScreenWakeStatus } from './screenWakeLock'
 
 type Screen = 'loading' | 'token' | 'student' | 'admin' | 'unsupported'
 type RecorderState = 'idle' | 'checking' | 'recording' | 'review' | 'uploading' | 'processing' | 'error'
@@ -152,6 +153,12 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
   const isReading = taskType === 'reading'
   const minimumSeconds = isReading ? 0 : MIN_RECORDING_SECONDS
   const [recorderState, setRecorderState] = useState<RecorderState>('idle')
+  const [wakeStatus, setWakeStatus] = useState<ScreenWakeStatus>('requesting')
+  const [wakeRetry, setWakeRetry] = useState(0)
+  useEffect(() => {
+    if (recorderState !== 'recording') return
+    return keepScreenAwake(setWakeStatus, browserWakeEnvironment())
+  }, [recorderState, wakeRetry])
   const [message, setMessage] = useState('')
   const [followMessage, setFollowMessage] = useState('')
   const [activePhrase, setActivePhrase] = useState(0)
@@ -438,6 +445,7 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     <p className="muted">{context.study.instructions}</p>
     {isReading && <p>请你按照平常朗读文字的语速、语调完成下方文字段落的朗读。</p>}
     <p className="notice">{isReading ? '朗读题不限时长，读完下方文字后即可点击“完成”。' : '请自由表述至少3分钟，尽可能多地介绍自己和生活。满3分钟后“完成”按钮将变绿。'}</p>
+    <p className="muted">录音时请保持页面在前台，不要手动锁屏。开始后会尝试开启屏幕常亮。</p>
     <p className="muted">准备好后按“开始”进行表述，结束后按“完成”，试听确认后提交语音。</p>
     {!taskOpen && <div className="notice error">任务已经关闭，无法开始新的录音。</div>}
     {previousError && <div className="notice error">上一段录音处理失败：{previousError}。请重新录制。</div>}
@@ -445,6 +453,7 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     {isReading ? <article ref={reader} className={`reading-text ${showReadingProgress ? 'following' : ''}`} onTouchStart={() => { manualScrollUntil.current = Date.now() + 5000 }} onWheel={() => { manualScrollUntil.current = Date.now() + 5000 }}>{phrases.map((phrase, index) => <span ref={(element) => { phraseElements.current[index] = element }} className={`reading-phrase ${showReadingProgress && index < activePhrase ? 'completed' : ''} ${showReadingProgress && index === activePhrase ? 'active' : ''}`} key={phrase.id}>{phrase.text}</span>)}</article> : <article className="reading-text expression-prompt">{context.study.self_expression_prompt}</article>}
     <div className="recorder-panel"><div className="timer">{formatSeconds(elapsed)}<small>{isReading ? '读完即可完成' : '/ 至少 03:00'}</small></div><div className="meter"><span style={{ transform: `scaleX(${Math.max(0.02, level)})` }} /></div>
     {isReading && followMessage && recorderState === 'recording' && <div className="follow-status">{followMessage}</div>}
+    {recorderState === 'recording' && <div className="notice" role="status">{wakeStatus === 'active' ? '屏幕常亮已开启，录音结束后自动恢复。' : wakeStatus === 'requesting' ? '正在请求屏幕常亮…' : <><span>当前未能保持屏幕常亮，请将手机自动锁屏时间调长或设为“永不”，并保持本页面在前台。</span><button className="secondary" onClick={() => setWakeRetry((value) => value + 1)}>重试屏幕常亮</button></>}</div>}
     {message && <div className="notice" role="status">{message}</div>}
     {recorderState === 'review' && elapsed < minimumSeconds && <div className="notice error">录音不足3分钟，请重新录制。</div>}
     {recorderState === 'review' && audioUrl && <audio controls src={audioUrl} className="audio-preview" />}
