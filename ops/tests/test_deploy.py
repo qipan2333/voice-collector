@@ -20,12 +20,19 @@ if name == 'podman-compose':
 if args[:1] == ['inspect']:
     if '--format' in args:
         fmt=args[args.index('--format')+1]
-        print('true' if 'Running' in fmt else 'new-image' if fmt == '{{.Image}}' else 'old-image')
+        calls=[json.loads(line) for line in pathlib.Path(os.environ['COMMAND_LOG']).read_text().splitlines()]
+        replaced=any(c[:2] == ['podman', 'rm'] and 'ops_api_1' in c for c in calls)
+        print('true' if 'Running' in fmt else ('new-image' if replaced else 'old-image') if fmt == '{{.Image}}' else 'old-image')
     else:
         root=os.environ['TEST_PROJECT']
         db=args[1]=='ops_db_1'
         print(json.dumps([{'Config': {'Labels': {'com.docker.compose.project': 'ops'}}, 'Mounts': [{'Source': root + ('/postgres-data' if db else '/data'), 'Destination': '/var/lib/postgresql/data' if db else '/srv/voice-collector'}]}]))
 elif args[:2] == ['image', 'inspect']: print('new-image')
+elif args[:1] == ['rm']:
+    calls=[json.loads(line) for line in pathlib.Path(os.environ['COMMAND_LOG']).read_text().splitlines()]
+    if 'ops_api_1' in args and not any(c[:2] == ['podman', 'rm'] and 'ops_web_1' in c and 'ops_worker_1' in c for c in calls):
+        print('API has dependent containers', file=sys.stderr)
+        sys.exit(125)
 elif args[:1] == ['build'] and fail == 'build': sys.exit(1)
 elif args[:1] == ['exec']:
     if 'psql' in args: print('0')
@@ -77,7 +84,10 @@ def test_deploy_orders_backup_migration_and_services(tmp_path):
     assert not any(c[1] in ['stop', 'rm'] and 'ops_db_1' in c for c in commands)
     dump = next(i for i,c in enumerate(commands) if 'pg_dump' in c)
     up = [(i,c) for i,c in enumerate(commands) if c[0] == 'podman-compose' and 'up' in c]
-    assert dump < up[0][0] < up[1][0]
+    removals = [(i,c) for i,c in enumerate(commands) if c[:2] == ['podman', 'rm']]
+    assert removals[0][1][2:] == ['ops_web_1', 'ops_worker_1']
+    assert removals[1][1][2:] == ['ops_api_1']
+    assert dump < removals[0][0] < removals[1][0] < up[0][0] < up[1][0]
     assert up[0][1][-1] == 'api'
     assert up[1][1][-2:] == ['worker', 'web']
     import yaml

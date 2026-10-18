@@ -51,7 +51,7 @@ on_error() {
     podman start ops_api_1 ops_worker_1 ops_web_1 >>"$LOG" 2>&1 || true
     echo '迁移尚未开始，已尝试恢复原容器。' >&2
   elif [[ "$MIGRATION_STARTED" == 1 ]]; then
-    echo '迁移可能已执行，未自动回滚数据库；请先检查 deploy.log 和数据库状态。' >&2
+    echo '容器替换已开始，迁移可能已执行；未自动回滚数据库，请检查 deploy.log 和数据库状态。' >&2
   fi
   exit "$result"
 }
@@ -115,7 +115,11 @@ tar -C "$ROOT_DIR" -czf "$BACKUP_DIR/data.tar.gz" data
 (cd "$BACKUP_DIR" && sha256sum database.dump data.tar.gz ops.env previous-source.tar.gz > SHA256SUMS)
 echo '启动新版 API，并等待数据库迁移完成。'
 MIGRATION_STARTED=1
-pc up -d --no-build --no-deps --force-recreate api
+# Removing depends_on from YAML does not remove dependencies stored on old
+# containers. Delete stopped dependents first; check each native Podman result.
+podman rm ops_web_1 ops_worker_1 >>"$LOG" 2>&1
+podman rm ops_api_1 >>"$LOG" 2>&1
+pc up -d --no-build --no-deps api
 READY=0
 for ((i=0; i<60; i++)); do
   if podman exec ops_api_1 curl -fsS http://127.0.0.1:8000/health/ready >>"$LOG" 2>&1; then READY=1; break; fi
@@ -126,9 +130,12 @@ if [[ "$READY" != 1 ]]; then
   echo 'API 健康检查超时。' >&2
   false
 fi
-[[ "$(podman inspect ops_api_1 --format '{{.Image}}')" == "$(cat "$BACKUP_DIR/new-api-image.txt")" ]]
+if [[ "$(podman inspect ops_api_1 --format '{{.Image}}')" != "$(cat "$BACKUP_DIR/new-api-image.txt")" ]]; then
+  echo 'API 容器运行的不是本次构建镜像，停止部署。' >&2
+  false
+fi
 podman exec ops_api_1 alembic current >>"$LOG" 2>&1
-pc up -d --no-build --no-deps --force-recreate worker web
+pc up -d --no-build --no-deps worker web
 WEB_READY=0
 for ((i=0; i<30; i++)); do
   if podman exec ops_web_1 wget -q -O /dev/null http://127.0.0.1/ >>"$LOG" 2>&1 &&

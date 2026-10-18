@@ -76,7 +76,7 @@ bash ops/scripts/deploy-ecs.sh
 2. 保存旧代码提交、源码包、镜像 ID 和配置；更新服务器代码，构建镜像。构建失败时原容器继续运行。
 3. 暂停 web/API，最多等待 4 分钟让 worker 排空任务，再停止 worker。应在没有学生录音时部署，停机期间页面不可用，未提交的浏览器录音不会被备份。
 4. 备份 PostgreSQL 和整个 data 目录，验证数据库备份目录并生成校验和。
-5. 单独重建 API，自动执行 Alembic 迁移，等待健康检查通过并验证镜像 ID，然后重建 worker/web，验证页面及反向代理健康路径。
+5. 先删除已停止的旧 web/worker 容器，解除 Podman 保存的 API 依赖，再删除旧 API。逐条检查原生 podman rm 的返回结果，然后单独重建 API，自动执行 Alembic 迁移，等待健康检查通过并验证镜像 ID，然后重建 worker/web，验证页面及反向代理健康路径。
 
 备份位置 `/root/voice-collector-backup-日期时间.随机后缀/`，包含 `database.dump`、`data.tar.gz`、`ops.env`、`previous-source.tar.gz`、`previous-commit.txt`、镜像 ID 和 `deploy.log`。日志可能包含 Podman Compose 输出的环境变量，目录和文件仅当前用户可读；脚本不会自动删除历史备份。
 
@@ -89,3 +89,5 @@ bash ops/scripts/deploy-ecs.sh
 ```bash
 DEPLOY_REMOTE_DIR=/root/voice-collector bash ops/scripts/deploy-ecs.sh root@121.41.177.154
 ```
+
+若旧脚本停在 API 更新阶段并报告失败，先检查实际镜像 ID 和 Alembic 版本：旧 Podman Compose 可能在删除 API 被依赖阻止后仍返回成功并重启旧容器。新版脚本已改为先删除旧依赖容器，再更新 API，并保留镜像 ID 校验。
