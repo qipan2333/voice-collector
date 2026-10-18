@@ -20,6 +20,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .audio import extension_for_mime
+from .experiment import CONSENT_VERSION, READING_TEXT, MIN_RECORDING_SECONDS
 from .config import get_settings
 from .db import Base, SessionLocal, engine, get_db
 from .models import (
@@ -49,6 +50,7 @@ from .schemas import (
     ExportRequest,
     InviteOut,
     ParticipantContext,
+    ParticipantInfo,
     QCUpdateRequest,
     ReviewUpdateRequest,
     StudyCreateRequest,
@@ -149,6 +151,7 @@ def _admin_recording_out(
         invite_id=invite.id,
         invite_status=invite.status,
         invite_attempt_count=invite_attempt_count,
+        participant_info=invite.participant_info,
         attempt=_attempt_to_out(attempt),
         reviewer_username=reviewer.username if reviewer else None,
         quality_reasons=[str(item) for item in reasons] if isinstance(reasons, list) else [],
@@ -159,7 +162,7 @@ def _admin_recording_out(
 def _follow_along_enabled(study: Study) -> bool:
     return bool(
         settings.mimo_api_key
-        and study.consent_version == settings.mimo_required_consent_version
+        and study.consent_version in {settings.mimo_required_consent_version, CONSENT_VERSION}
     )
 
 
@@ -298,19 +301,23 @@ def _build_export(job_id: str) -> None:
         destination = _export_path(job.id)
         manifest = io.StringIO()
         writer = csv.DictWriter(manifest, fieldnames=[
-            "participant_code", "attempt_id", "attempt_no", "state", "qc_status",
+            "participant_code", "attempt_id", "attempt_no", "task_type", "recording_round", "state", "qc_status",
+            "name", "school", "grade", "class_name", "phone", "student_number",
             "duration_seconds", "original_mime", "original_size", "original_sha256",
             "normalized_sha256", "sample_rate", "channels", "text_version", "created_at",
         ])
         writer.writeheader()
         checksums: list[str] = []
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("README.txt", f"Study: {study.title}\nText version: {study.text_version}\n\n{study.text}\n")
+            archive.writestr("README.txt", f"Study: {study.title}\nText version: {study.text_version}\n\n{study.text}\n\n自我表述题：\n{study.self_expression_prompt}\n")
             for attempt, invite in rows:
                 writer.writerow({
                     "participant_code": invite.participant_code,
                     "attempt_id": attempt.id,
                     "attempt_no": attempt.attempt_no,
+                    "task_type": attempt.task_type,
+                    "recording_round": attempt.recording_round,
+                    **{key: (invite.participant_info or {}).get(key, "") for key in ("name", "school", "grade", "class_name", "phone", "student_number")},
                     "state": attempt.state,
                     "qc_status": attempt.qc_status,
                     "duration_seconds": attempt.duration_seconds,
@@ -334,7 +341,7 @@ def _build_export(job_id: str) -> None:
                     source = settings.media_root / relative
                     if not source.is_file():
                         continue
-                    archive_name = f"{variant}/{invite.participant_code}/attempt-{attempt.attempt_no}-{source.name}"
+                    archive_name = f"{variant}/{invite.participant_code}/{attempt.task_type}/round-{attempt.recording_round}-attempt-{attempt.attempt_no}-{source.name}"
                     archive.write(source, archive_name)
                     if checksum:
                         checksums.append(f"{checksum}  {archive_name}")
@@ -362,10 +369,10 @@ def startup() -> None:
         if not db.scalar(select(Study).limit(1)):
             db.add(Study(
                 id=str(uuid.uuid4()), title="学生朗读录音任务",
-                text="请在管理后台配置固定朗读文本。", text_version="v1",
+                text=READING_TEXT, text_version="v1", consent_version=CONSENT_VERSION,
                 instructions="请在安静环境中使用手机完成录音，并保持手机位置稳定。",
                 status="draft", expected_seconds=settings.expected_recording_seconds,
-                min_seconds=30, max_seconds=settings.max_recording_seconds,
+                min_seconds=1, max_seconds=settings.max_recording_seconds,
             ))
         if not db.scalar(select(AdminUser).where(AdminUser.username == settings.admin_username)):
             db.add(AdminUser(
@@ -420,10 +427,11 @@ def exchange(request: ExchangeRequest, response: Response, db: Session = Depends
 @app.get("/api/v1/participant/context", response_model=ParticipantContext)
 def participant_context(participant_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> ParticipantContext:
     _, invite, study = _participant_from_cookie(db, participant_session)
-    consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.confirmed.is_(True)))
+    consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.policy_version == study.consent_version, ConsentReceipt.confirmed.is_(True)))
     attempts = db.scalars(select(RecordingAttempt).where(RecordingAttempt.invite_id == invite.id).order_by(RecordingAttempt.attempt_no)).all()
     return ParticipantContext(
         participant_code=invite.participant_code, invite_status=invite.status, study=_study_to_out(study),
+        participant_info=invite.participant_info, recording_round=invite.recording_round,
         consent_confirmed=bool(consent), follow_along_enabled=_follow_along_enabled(study),
         follow_along_interval_seconds=max(2.0, settings.mimo_asr_participant_interval_seconds + 0.5),
         attempts=[_attempt_to_out(item) for item in attempts],
@@ -480,12 +488,36 @@ def participant_consent(request: ConsentRequest, participant_session: str | None
     if request.policy_version != study.consent_version:
         raise HTTPException(status_code=409, detail="知情同意说明已更新，请重新打开页面")
     if not request.confirmed:
-        raise HTTPException(status_code=422, detail="必须确认已完成校外知情同意流程")
+        raise HTTPException(status_code=422, detail="请阅读并勾选知情同意书")
     existing = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.policy_version == request.policy_version))
-    if not existing:
+    if existing:
+        existing.confirmed = True
+        existing.confirmed_at = utcnow()
+    else:
         db.add(ConsentReceipt(id=str(uuid.uuid4()), invite_id=invite.id, policy_version=request.policy_version, confirmed=True))
     db.commit()
     return {"confirmed": True}
+
+
+@app.put("/api/v1/participant/profile", response_model=ParticipantInfo)
+def save_participant_profile(request: ParticipantInfo, participant_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> ParticipantInfo:
+    _, invite, study = _participant_from_cookie(db, participant_session)
+    if study.status != "open":
+        raise HTTPException(status_code=409, detail="任务已经关闭")
+    consent = db.scalar(select(ConsentReceipt).where(
+        ConsentReceipt.invite_id == invite.id, ConsentReceipt.policy_version == study.consent_version,
+        ConsentReceipt.confirmed.is_(True),
+    ))
+    if not consent:
+        raise HTTPException(status_code=403, detail="请先确认知情同意")
+    for value, options, label in [(request.school, study.school_options, "学校"),
+                                  (request.grade, study.grade_options, "年级"),
+                                  (request.class_name, study.class_options, "班级")]:
+        if value not in options:
+            raise HTTPException(status_code=422, detail=f"请从任务配置的{label}选项中选择")
+    invite.participant_info = request.model_dump()
+    db.commit()
+    return request
 
 
 @app.post("/api/v1/participant/attempts", response_model=AttemptOut)
@@ -493,14 +525,28 @@ def create_attempt(request: AttemptCreateRequest, participant_session: str | Non
     _, invite, study = _participant_from_cookie(db, participant_session)
     if study.status != "open":
         raise HTTPException(status_code=409, detail="任务已经关闭，不能开始新的录音")
-    consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.confirmed.is_(True)))
+    consent = db.scalar(select(ConsentReceipt).where(ConsentReceipt.invite_id == invite.id, ConsentReceipt.policy_version == study.consent_version, ConsentReceipt.confirmed.is_(True)))
     if not consent:
         raise HTTPException(status_code=403, detail="请先确认知情同意")
-    count = db.scalar(select(func.count(RecordingAttempt.id)).where(RecordingAttempt.invite_id == invite.id)) or 0
-    if count >= 3:
-        raise HTTPException(status_code=409, detail="已达到最大录音次数，请联系研究人员重开")
+    if not invite.participant_info:
+        raise HTTPException(status_code=403, detail="请先填写个人信息")
+    if request.task_type == "self_expression" and (request.client_duration_seconds is None or request.client_duration_seconds < MIN_RECORDING_SECONDS):
+        raise HTTPException(status_code=422, detail="自我表述题须录制满3分钟后才能提交")
+    current = db.scalars(select(RecordingAttempt).where(
+        RecordingAttempt.invite_id == invite.id,
+        RecordingAttempt.recording_round == invite.recording_round,
+    )).all()
+    same_task = [item for item in current if item.task_type == request.task_type]
+    if any(item.state in {"ready", "queued", "processing"} for item in same_task):
+        raise HTTPException(status_code=409, detail="这道题已提交，请等待处理或联系研究人员重开")
+    if len(same_task) >= 3:
+        raise HTTPException(status_code=409, detail="这道题已达到最大录音次数，请联系研究人员重开")
+    if request.task_type == "self_expression" and not any(item.task_type == "reading" and item.state == "ready" for item in current):
+        raise HTTPException(status_code=409, detail="请先完成朗读题")
+    count = db.scalar(select(func.max(RecordingAttempt.attempt_no)).where(RecordingAttempt.invite_id == invite.id)) or 0
     attempt = RecordingAttempt(
         id=str(uuid.uuid4()), invite_id=invite.id, attempt_no=count + 1,
+        task_type=request.task_type, recording_round=invite.recording_round,
         client_duration_seconds=request.client_duration_seconds,
         browser_family=request.browser_family[:100] if request.browser_family else None,
         os_family=request.os_family[:100] if request.os_family else None,
@@ -518,7 +564,7 @@ async def upload_attempt(attempt_id: str, request: Request, participant_session:
     attempt = db.get(RecordingAttempt, attempt_id)
     if not attempt or attempt.invite_id != invite.id:
         raise HTTPException(status_code=404, detail="录音不存在")
-    if attempt.state not in {"created", "uploading"}:
+    if attempt.state not in {"created", "uploading"} or attempt.recording_round != invite.recording_round:
         raise HTTPException(status_code=409, detail="录音当前不可上传")
     length_header = request.headers.get("content-length")
     if length_header and int(length_header) > settings.max_upload_bytes:
@@ -551,12 +597,14 @@ def finalize_attempt(attempt_id: str, participant_session: str | None = Cookie(d
         raise HTTPException(status_code=404, detail="录音不存在")
     if not attempt.original_path or not (settings.media_root / attempt.original_path).exists():
         raise HTTPException(status_code=409, detail="请先上传录音文件")
-    if attempt.state == "queued":
+    if attempt.state in {"queued", "processing", "ready"}:
         return _attempt_to_out(attempt)
+    if attempt.state != "uploading" or attempt.recording_round != invite.recording_round:
+        raise HTTPException(status_code=409, detail="录音当前不可提交，请重新录制")
     attempt.state = "queued"
     attempt.submitted_at = utcnow()
-    invite.status = "submitted"
-    invite.submitted_at = attempt.submitted_at
+    invite.status = "active"
+    invite.submitted_at = None
     db.add(ProcessingJob(id=str(uuid.uuid4()), attempt_id=attempt.id))
     db.commit()
     return _attempt_to_out(attempt)
@@ -644,7 +692,9 @@ def create_study(request: StudyCreateRequest, admin_session: str | None = Cookie
     study = Study(id=str(uuid.uuid4()), title=request.title, text=request.text, instructions=request.instructions,
                   text_version=f"v{int(datetime.now(timezone.utc).timestamp())}", status="draft",
                   expected_seconds=request.expected_seconds, min_seconds=request.min_seconds,
-                  max_seconds=request.max_seconds, consent_version=request.consent_version)
+                  max_seconds=request.max_seconds, consent_version=request.consent_version,
+                  self_expression_prompt=request.self_expression_prompt, school_options=request.school_options,
+                  grade_options=request.grade_options, class_options=request.class_options)
     db.add(study)
     _audit(db, "study_created", "admin", user.id, "study", study.id)
     db.commit()
@@ -657,9 +707,9 @@ def update_study(study_id: str, request: StudyUpdateRequest, admin_session: str 
     study = db.get(Study, study_id)
     if not study:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if study.status != "draft":
-        raise HTTPException(status_code=409, detail="只有草稿任务可以修改内容")
     values = request.model_dump(exclude_none=True)
+    if study.status != "draft" and (study.status == "archived" or set(values) - {"school_options", "grade_options", "class_options"}):
+        raise HTTPException(status_code=409, detail="非草稿任务只能配置个人信息下拉选项")
     proposed = {
         "expected_seconds": values.get("expected_seconds", study.expected_seconds),
         "min_seconds": values.get("min_seconds", study.min_seconds),
@@ -669,7 +719,8 @@ def update_study(study_id: str, request: StudyUpdateRequest, admin_session: str 
         raise HTTPException(status_code=422, detail="时长必须满足最短时长 ≤ 预计时长 ≤ 最长时长")
     for field, value in values.items():
         setattr(study, field, value)
-    study.text_version = f"v{int(datetime.now(timezone.utc).timestamp())}"
+    if set(values) - {"school_options", "grade_options", "class_options"}:
+        study.text_version = f"v{int(datetime.now(timezone.utc).timestamp())}"
     _audit(db, "study_updated", "admin", user.id, "study", study.id, values)
     db.commit()
     return _study_to_out(study)
@@ -683,6 +734,8 @@ def open_study(study_id: str, admin_session: str | None = Cookie(default=None), 
         raise HTTPException(status_code=404, detail="任务不存在")
     if study.status not in {"draft", "closed"}:
         raise HTTPException(status_code=409, detail="任务当前无法开放")
+    if not all((study.school_options, study.grade_options, study.class_options)):
+        raise HTTPException(status_code=422, detail="请先配置学校、年级和班级下拉选项")
     study.status = "open"
     _audit(db, "study_opened", "admin", user.id, "study", study.id)
     db.commit()
@@ -828,9 +881,7 @@ def reopen_invite(invite_id: str, admin_session: str | None = Cookie(default=Non
     study = db.get(Study, invite.study_id)
     if not study or study.status != "open":
         raise HTTPException(status_code=409, detail="只有开放中的任务可以允许重录")
-    attempt_count = db.scalar(select(func.count(RecordingAttempt.id)).where(RecordingAttempt.invite_id == invite.id)) or 0
-    if attempt_count >= 3:
-        raise HTTPException(status_code=409, detail="该邀请码已达到最大录音次数")
+    invite.recording_round += 1
     invite.status = "reopened"
     invite.submitted_at = None
     _audit(db, "invite_reopened", "admin", user.id, "invite", invite.id)

@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from .audio import assess_recording_quality, extension_for_mime, move_original, normalize, probe, sha256_file, volume_metrics
 from .config import get_settings
+from .experiment import MIN_RECORDING_SECONDS
 from .db import SessionLocal
 from .models import Invite, ProcessingJob, RecordingAttempt, Study, utcnow
 
@@ -57,7 +58,8 @@ def process_one() -> bool:
             raise ValueError("上传源文件不存在")
         info = probe(source)
         duration = float(info["duration_seconds"])
-        if duration < 1 or duration > settings.max_recording_seconds:
+        minimum = MIN_RECORDING_SECONDS if attempt.task_type == "self_expression" else 1
+        if duration < minimum or duration > settings.max_recording_seconds:
             raise ValueError(f"录音时长不符合限制: {duration:.1f}s")
         original_dir = settings.media_root / "original" / invite.participant_code
         normalized_dir = settings.media_root / "normalized" / invite.participant_code
@@ -69,7 +71,7 @@ def process_one() -> bool:
         normalized_hash = sha256_file(normalized_path)
         metrics = {**info, **volume_metrics(original_path)}
         quality_status, quality_reasons = assess_recording_quality(
-            duration, study.min_seconds, study.max_seconds, metrics,
+            duration, minimum, study.max_seconds, metrics,
         )
         metrics["quality_reasons"] = quality_reasons
         attempt.original_path = str(original_path.relative_to(settings.media_root))
@@ -83,6 +85,15 @@ def process_one() -> bool:
         attempt.auto_quality_status = quality_status
         attempt.state = "ready"
         attempt.error_message = None
+        db.flush()
+        completed = set(db.scalars(select(RecordingAttempt.task_type).where(
+            RecordingAttempt.invite_id == invite.id,
+            RecordingAttempt.recording_round == invite.recording_round,
+            RecordingAttempt.state == "ready",
+        )).all())
+        if completed == {"reading", "self_expression"}:
+            invite.status = "submitted"
+            invite.submitted_at = utcnow()
         job.state = "done"
         job.finished_at = utcnow()
         db.commit()

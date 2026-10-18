@@ -4,6 +4,10 @@ export type Study = {
   id: string;
   title: string;
   text: string;
+  self_expression_prompt: string;
+  school_options: string[];
+  grade_options: string[];
+  class_options: string[];
   text_version: string;
   instructions: string;
   status: string;
@@ -18,6 +22,8 @@ export type Study = {
 export type Attempt = {
   id: string;
   attempt_no: number;
+  task_type: "reading" | "self_expression";
+  recording_round: number;
   state: string;
   qc_status: string;
   auto_quality_status: string;
@@ -56,10 +62,15 @@ export type AdminRecording = {
   invite_id: string;
   invite_status: string;
   invite_attempt_count: number;
+  participant_info: ParticipantInfo | null;
   attempt: Attempt;
   reviewer_username?: string;
   quality_reasons: string[];
   audio_variants: Array<"original" | "normalized">;
+};
+
+export type ParticipantInfo = {
+  name: string; school: string; grade: string; class_name: string; phone: string; student_number: string;
 };
 
 export type Context = {
@@ -67,6 +78,8 @@ export type Context = {
   invite_status: string;
   study: Study;
   consent_confirmed: boolean;
+  participant_info: ParticipantInfo | null;
+  recording_round: number;
   follow_along_enabled: boolean;
   follow_along_interval_seconds: number;
   attempts: Attempt[];
@@ -133,6 +146,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ confirmed: true, policy_version }),
     }),
+  saveProfile: (profile: ParticipantInfo) => request<ParticipantInfo>("/api/v1/participant/profile", { method: "PUT", body: JSON.stringify(profile) }),
   createAttempt: (metadata: Record<string, unknown>) =>
     request<Attempt>("/api/v1/participant/attempts", {
       method: "POST",

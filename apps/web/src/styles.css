@@ -240,3 +240,8 @@ footer { margin-top: auto; color: #9aa2b2; text-align: center; font-size: 12px; 
   .task-form-grid { grid-template-columns: 1fr; }
   .task-form-grid .wide { grid-column: auto; }
 }
+
+.complete-recording { color: white; background: #238554; }
+.complete-recording:disabled { background: #7a8496; }
+.expression-prompt { max-height: none; }
+.consent-copy { white-space: pre-wrap; }

@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from .experiment import CONSENT_VERSION, SELF_EXPRESSION_PROMPT
 
 
 class ErrorResponse(BaseModel):
@@ -19,7 +20,19 @@ class ConsentRequest(BaseModel):
     policy_version: str = Field(min_length=1, max_length=64)
 
 
+class ParticipantInfo(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    school: str = Field(min_length=1, max_length=200)
+    grade: str = Field(min_length=1, max_length=100)
+    class_name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(pattern=r"^1[0-9]{10}$")
+    student_number: str = Field(min_length=1, max_length=100)
+
+
 class AttemptCreateRequest(BaseModel):
+    task_type: Literal["reading", "self_expression"] = "reading"
     client_duration_seconds: float | None = Field(default=None, ge=0, le=900)
     browser_family: str | None = Field(default=None, max_length=512)
     os_family: str | None = Field(default=None, max_length=256)
@@ -32,6 +45,10 @@ class StudyOut(BaseModel):
     id: str
     title: str
     text: str
+    self_expression_prompt: str
+    school_options: list[str]
+    grade_options: list[str]
+    class_options: list[str]
     text_version: str
     instructions: str
     status: str
@@ -48,6 +65,8 @@ class AttemptOut(BaseModel):
 
     id: str
     attempt_no: int
+    task_type: Literal["reading", "self_expression"]
+    recording_round: int
     state: str
     qc_status: str
     auto_quality_status: str
@@ -71,6 +90,8 @@ class ParticipantContext(BaseModel):
     invite_status: str
     study: StudyOut
     consent_confirmed: bool
+    participant_info: ParticipantInfo | None = None
+    recording_round: int
     follow_along_enabled: bool = False
     follow_along_interval_seconds: float = 8.0
     attempts: list[AttemptOut]
@@ -94,23 +115,43 @@ class AdminLoginRequest(BaseModel):
     otp: str | None = None
 
 
-class StudyCreateRequest(BaseModel):
+class StudyOptions(BaseModel):
+    @field_validator("school_options", "grade_options", "class_options", check_fields=False)
+    @classmethod
+    def validate_options(cls, values):
+        if values is None:
+            return values
+        options = list(dict.fromkeys(value.strip() for value in values))
+        if any(not value or len(value) > 100 for value in options):
+            raise ValueError("下拉选项不能为空，且每项不能超过100字")
+        return options
+
+
+class StudyCreateRequest(StudyOptions):
     title: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1)
+    self_expression_prompt: str = Field(default=SELF_EXPRESSION_PROMPT, min_length=1)
+    school_options: list[str] = Field(default_factory=list, max_length=500)
+    grade_options: list[str] = Field(default_factory=list, max_length=500)
+    class_options: list[str] = Field(default_factory=list, max_length=500)
     instructions: str = Field(default="请在安静环境中使用手机完成录音。")
     expected_seconds: int = Field(default=180, ge=30, le=900)
-    min_seconds: int = Field(default=30, ge=1, le=900)
-    max_seconds: int = Field(default=480, ge=30, le=900)
-    consent_version: str = Field(default="consent-v2-mimo-asr", max_length=64)
+    min_seconds: int = Field(default=1, ge=1, le=900)
+    max_seconds: int = Field(default=480, ge=180, le=900)
+    consent_version: str = Field(default=CONSENT_VERSION, max_length=64)
 
 
-class StudyUpdateRequest(BaseModel):
+class StudyUpdateRequest(StudyOptions):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     text: str | None = Field(default=None, min_length=1)
+    self_expression_prompt: str | None = Field(default=None, min_length=1)
+    school_options: list[str] | None = Field(default=None, max_length=500)
+    grade_options: list[str] | None = Field(default=None, max_length=500)
+    class_options: list[str] | None = Field(default=None, max_length=500)
     instructions: str | None = None
     expected_seconds: int | None = Field(default=None, ge=30, le=900)
     min_seconds: int | None = Field(default=None, ge=1, le=900)
-    max_seconds: int | None = Field(default=None, ge=30, le=900)
+    max_seconds: int | None = Field(default=None, ge=180, le=900)
     consent_version: str | None = Field(default=None, min_length=1, max_length=64)
 
 
@@ -138,6 +179,7 @@ class AdminRecordingOut(BaseModel):
     invite_status: str
     invite_attempt_count: int
     attempt: AttemptOut
+    participant_info: ParticipantInfo | None = None
     reviewer_username: str | None = None
     quality_reasons: list[str] = Field(default_factory=list)
     audio_variants: list[str] = Field(default_factory=list)

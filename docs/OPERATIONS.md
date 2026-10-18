@@ -37,8 +37,18 @@ bash ops/scripts/backup.sh
 
 ### 跟读不变色
 
-检查任务 `consent_version` 是否为 `consent-v2-mimo-asr`、`MIMO_API_KEY` 是否配置，以及 `/health/ready` 的 `asr_configured`。MiMo 限流、超时或识别失败不会影响完整录音。
+检查任务 `consent_version` 是否为 `consent-v3-experiment`（也兼容 `consent-v2-mimo-asr`）、`MIMO_API_KEY` 是否配置，以及 `/health/ready` 的 `asr_configured`。MiMo 限流、超时或识别失败不会影响完整录音。
 
 ### 磁盘空间不足
 
 应用在剩余空间低于 10GB 时拒绝新上传。先导出并转移数据，再清理过期导出文件；不要直接删除仍在任务中的录音目录。
+
+## 2026-10 实验流程升级
+
+本次新增迁移 `7e902f5c81a2`。Docker API 启动时自动执行 `alembic upgrade head`；直接运行时需先在仓库根目录执行 `PYTHONPATH=apps/api .venv/bin/alembic upgrade head`，再重启 API、worker 和前端。
+
+迁移保留旧录音及审核结果，将其归为第 1 轮朗读题。旧的 submitted 邀请变为 active，学生确认新版同意书、补全个人信息后继续完成自我表述题；已有成功朗读无需重录。旧同意回执保留，但不能代替新版本确认。自定义朗读文本保留，只有旧占位文本会替换为实验文档原文。新任务默认包含文档中的朗读原文和自我表述提示语。
+
+上线前在后台填写真实学校、年级、班级选项（每行一项）；文档未提供这些名单，因此不会预填虚构选项。已有开放任务可点击“个人信息选项”直接配置。新版知情同意使用 `consent-v3-experiment`；配置了 MiMo 时，仍会在同意页明确展示跟读分片说明，仅朗读题发送分片。
+
+朗读题读完即可结束；自我表述题满 180 秒后“完成”按钮变绿。worker 会按实际音频时长校验，自我表述不足 180 秒会失败并允许重录。测试覆盖两题流程、旧版同意失效、个人信息校验、失败重试、重开轮次、导出和旧数据库升级。

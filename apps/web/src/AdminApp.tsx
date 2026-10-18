@@ -18,11 +18,17 @@ import {
 } from "lucide-react";
 import { api, type AdminRecording, type AdminStudy, type Study } from "./api";
 
+import { CONSENT_VERSION, READING_TEXT, SELF_EXPRESSION_PROMPT } from "./experiment";
+
 type AdminTab = "overview" | "recordings" | "distribution";
 type StudyForm = Pick<
   Study,
   | "title"
   | "text"
+  | "self_expression_prompt"
+  | "school_options"
+  | "grade_options"
+  | "class_options"
   | "instructions"
   | "expected_seconds"
   | "min_seconds"
@@ -32,12 +38,16 @@ type StudyForm = Pick<
 
 const EMPTY_FORM: StudyForm = {
   title: "学生朗读录音任务",
-  text: "",
+  text: READING_TEXT,
+  self_expression_prompt: SELF_EXPRESSION_PROMPT,
+  school_options: [],
+  grade_options: [],
+  class_options: [],
   instructions: "请在安静环境中使用手机完成录音，并保持手机位置稳定。",
   expected_seconds: 180,
-  min_seconds: 30,
+  min_seconds: 1,
   max_seconds: 480,
-  consent_version: "consent-v2-mimo-asr",
+  consent_version: CONSENT_VERSION,
 };
 
 const STUDY_STATUS: Record<string, string> = {
@@ -96,10 +106,12 @@ function taskIdFromHash() {
 
 function TaskEditor({
   initial,
+  optionsOnly = false,
   onCancel,
   onSave,
 }: {
   initial: StudyForm;
+  optionsOnly?: boolean;
   onCancel: () => void;
   onSave: (form: StudyForm) => Promise<void>;
 }) {
@@ -119,13 +131,13 @@ function TaskEditor({
         <header>
           <div>
             <span className="admin-kicker">任务设置</span>
-            <h2>{initial.text ? "编辑草稿任务" : "新建任务"}</h2>
+            <h2>{optionsOnly ? "配置个人信息选项" : "任务设置"}</h2>
           </div>
           <button className="icon-button" onClick={onCancel} title="关闭">
             <X size={18} />
           </button>
         </header>
-        <div className="task-form-grid">
+        <fieldset className="task-form-grid" disabled={optionsOnly} style={{ border: 0, padding: 0, margin: 0, display: optionsOnly ? "none" : undefined }}>
           <label>
             任务名称
             <input
@@ -141,6 +153,8 @@ function TaskEditor({
               onChange={(event) => set("text", event.target.value)}
             />
           </label>
+          <label className="wide">自我表述题提示语<textarea rows={6} value={form.self_expression_prompt} onChange={(event) => set("self_expression_prompt", event.target.value)} /></label>
+          <p className="wide hint">朗读题读完即可提交；自我表述题至少录制 180 秒。</p>
           <label className="wide">
             参与说明
             <textarea
@@ -160,10 +174,11 @@ function TaskEditor({
             />
           </label>
           <label>
-            最短时长（秒）
+            朗读音频有效时长（秒）
             <input
               type="number"
-              value={form.min_seconds}
+              disabled
+              value={1}
               onChange={(event) =>
                 set("min_seconds", Number(event.target.value))
               }
@@ -186,7 +201,11 @@ function TaskEditor({
               onChange={(event) => set("consent_version", event.target.value)}
             />
           </label>
+        </fieldset>
+        <div className="task-form-grid">
+          {([['school_options', '学校'], ['grade_options', '年级'], ['class_options', '班级']] as const).map(([key, label]) => <label key={key}>{label}下拉选项（每行一项）<textarea rows={5} value={form[key].join('\n')} onChange={(event) => set(key, event.target.value.split('\n'))} /></label>)}
         </div>
+        <p className="hint">开放任务前请填写学校、年级、班级选项，学生须从下拉列表中选择。</p>
         {error && <div className="notice error">{error}</div>}
         <footer className="modal-actions">
           <button className="secondary" onClick={onCancel}>
@@ -199,7 +218,7 @@ function TaskEditor({
               setSaving(true);
               setError("");
               try {
-                await onSave(form);
+                await onSave({ ...form, min_seconds: 1, school_options: [...new Set(form.school_options.map((value) => value.trim()).filter(Boolean))], grade_options: [...new Set(form.grade_options.map((value) => value.trim()).filter(Boolean))], class_options: [...new Set(form.class_options.map((value) => value.trim()).filter(Boolean))] });
               } catch (reason) {
                 setError(reason instanceof Error ? reason.message : "保存失败");
               } finally {
@@ -617,6 +636,7 @@ export function AdminApp() {
                 <p>更新于 {formatDate(detail.study.updated_at)}</p>
               </div>
               <div className="study-actions">
+                {['open', 'closed'].includes(detail.study.status) && <button className="secondary" onClick={() => setEditor("edit")}><Pencil size={16} />个人信息选项</button>}
                 {detail.study.status === "draft" && (
                   <>
                     <button
@@ -753,6 +773,8 @@ export function AdminApp() {
                   <div>
                     <h2>朗读文本</h2>
                     <p className="reading-copy">{detail.study.text}</p>
+                    <h3>自我表述题</h3>
+                    <p className="reading-copy">{detail.study.self_expression_prompt}</p>
                   </div>
                   <dl>
                     <div>
@@ -764,10 +786,10 @@ export function AdminApp() {
                       <dd>{formatSeconds(detail.study.expected_seconds)}</dd>
                     </div>
                     <div>
-                      <dt>自动质检范围</dt>
+                      <dt>录音时长要求</dt>
                       <dd>
-                        {formatSeconds(detail.study.min_seconds)} –{" "}
-                        {formatSeconds(detail.study.max_seconds)}
+                        朗读题读完即可；自我表述题至少 03:00。
+                        超过 {formatSeconds(detail.study.max_seconds)} 标记复核。
                       </dd>
                     </div>
                     <div>
@@ -937,8 +959,9 @@ export function AdminApp() {
                                 <td>
                                   <strong>{item.participant_code}</strong>
                                   <small>
-                                    第 {attempt.attempt_no} 次 · {attempt.state}
+                                    {attempt.task_type === "self_expression" ? "自我表述题" : "朗读题"} · 第 {attempt.recording_round} 轮 · {attempt.state}
                                   </small>
+                                  {item.participant_info && <details><summary>个人信息</summary><small>{item.participant_info.name} · {item.participant_info.school} · {item.participant_info.grade} · {item.participant_info.class_name}</small><small>手机：{item.participant_info.phone} · 学号：{item.participant_info.student_number}</small></details>}
                                   {item.invite_status === "reopened" && (
                                     <small className="reopened-label">
                                       已允许再次录音
@@ -1036,15 +1059,12 @@ export function AdminApp() {
                                       className="icon-button"
                                       disabled={
                                         detail.study.status !== "open" ||
-                                        item.invite_attempt_count >= 3 ||
                                         reopeningInviteIds.includes(
                                           item.invite_id,
                                         )
                                       }
                                       title={
-                                        item.invite_attempt_count >= 3
-                                          ? "已达到最多 3 次录音"
-                                          : detail.study.status !== "open"
+                                        detail.study.status !== "open"
                                             ? "任务开放后才能允许重录"
                                             : "允许该参与者再次录音"
                                       }
@@ -1298,6 +1318,10 @@ export function AdminApp() {
               ? {
                   title: detail.study.title,
                   text: detail.study.text,
+                  self_expression_prompt: detail.study.self_expression_prompt,
+                  school_options: detail.study.school_options,
+                  grade_options: detail.study.grade_options,
+                  class_options: detail.study.class_options,
                   instructions: detail.study.instructions,
                   expected_seconds: detail.study.expected_seconds,
                   min_seconds: detail.study.min_seconds,
@@ -1306,11 +1330,12 @@ export function AdminApp() {
                 }
               : EMPTY_FORM
           }
+          optionsOnly={editor === "edit" && detail?.study.status !== "draft"}
           onCancel={() => setEditor(null)}
           onSave={async (form) => {
             const study =
               editor === "edit" && detail
-                ? await api.updateStudy(detail.study.id, form)
+                ? await api.updateStudy(detail.study.id, detail.study.status === "draft" ? form : { school_options: form.school_options, grade_options: form.grade_options, class_options: form.class_options })
                 : await api.createStudy(form);
             setEditor(null);
             selectTask(study.id);

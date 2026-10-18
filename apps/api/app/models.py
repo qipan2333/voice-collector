@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from .db import Base
+from .experiment import CONSENT_VERSION, READING_TEXT, SELF_EXPRESSION_PROMPT
 
 
 def utcnow() -> datetime:
@@ -21,14 +22,18 @@ class Study(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str] = mapped_column(String(200), default="朗读录音任务")
-    text: Mapped[str] = mapped_column(Text, default="请在这里配置固定朗读文本。")
+    text: Mapped[str] = mapped_column(Text, default=READING_TEXT)
+    self_expression_prompt: Mapped[str] = mapped_column(Text, default=SELF_EXPRESSION_PROMPT)
+    school_options: Mapped[list[str]] = mapped_column(JsonType, default=list)
+    grade_options: Mapped[list[str]] = mapped_column(JsonType, default=list)
+    class_options: Mapped[list[str]] = mapped_column(JsonType, default=list)
     text_version: Mapped[str] = mapped_column(String(64), default="v1")
     instructions: Mapped[str] = mapped_column(Text, default="请在安静环境中使用手机完成录音。")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     expected_seconds: Mapped[int] = mapped_column(Integer, default=180)
-    min_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    min_seconds: Mapped[int] = mapped_column(Integer, default=1)
     max_seconds: Mapped[int] = mapped_column(Integer, default=480)
-    consent_version: Mapped[str] = mapped_column(String(64), default="consent-v1")
+    consent_version: Mapped[str] = mapped_column(String(64), default=CONSENT_VERSION)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -40,6 +45,8 @@ class Invite(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     study_id: Mapped[str] = mapped_column(ForeignKey("studies.id"), index=True)
     participant_code: Mapped[str] = mapped_column(String(32), index=True)
+    participant_info: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
+    recording_round: Mapped[int] = mapped_column(Integer, default=1)
     token_digest: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="unused", index=True)
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -75,6 +82,8 @@ class RecordingAttempt(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     invite_id: Mapped[str] = mapped_column(ForeignKey("invites.id"), index=True)
+    task_type: Mapped[str] = mapped_column(String(24), default="reading")
+    recording_round: Mapped[int] = mapped_column(Integer, default=1)
     attempt_no: Mapped[int] = mapped_column(Integer)
     state: Mapped[str] = mapped_column(String(20), default="created", index=True)
     original_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
