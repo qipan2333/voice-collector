@@ -57,4 +57,13 @@ curl -I http://127.0.0.1:${WEB_PORT:-5173}
 
 Nginx 最小反向代理目标为 `127.0.0.1:5173`；不要直接把 API 端口 `8000` 暴露到公网。可直接使用 [docs/NGINX.md](docs/NGINX.md) 中的配置片段。
 
-学生依次完成知情同意、六项个人信息、朗读题和自我表述题。朗读题读完即可提交，自我表述题至少 3 分钟；两段录音分别保存。开放任务前需在后台配置学校、年级、班级下拉选项。升级说明见 `docs/OPERATIONS.md`。
+学生依次完成知情同意、六项个人信息、朗读题和自我表述题。朗读题读完即可提交，自我表述题至少 3 分钟；两段录音分别保存。学校、年级、班级暂用输入框填写，后台选项配置入口已隐藏，无需名单即可开放任务。升级说明见 `docs/OPERATIONS.md`。
+
+更新现有 ECS Podman 部署（在本地仓库执行）：
+
+```bash
+bash ops/scripts/deploy-ecs.sh --check  # 只读预检查
+bash ops/scripts/deploy-ecs.sh          # 上传当前提交、备份、构建、迁移、健康检查
+```
+
+默认目标为 `root@121.41.177.154:/root/voice-collector`，使用服务器 `ops/.env`。部署要求本地和服务器工作区干净；脚本不需要 Git 远程仓库。详见 `docs/DEPLOYMENT.md`。

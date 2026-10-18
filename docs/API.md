@@ -16,7 +16,7 @@
 
 跟读分片接口要求学生 Cookie、`Content-Type: audio/wav`、`X-ASR-Session-Id` 和递增的 `X-ASR-Sequence`。返回识别文字和延迟；接口不会持久化分片或转写结果。
 
-学生流程为：确认当前版本知情同意 → 填写个人信息 → 朗读题 → 自我表述题。个人信息包含 `name`、`school`、`grade`、`class_name`、`phone`、`student_number`；学校、年级、班级必须属于任务的下拉选项，学号按字符串保存以保留前导零。
+学生流程为：确认当前版本知情同意 → 填写个人信息 → 朗读题 → 自我表述题。个人信息包含 `name`、`school`、`grade`、`class_name`、`phone`、`student_number`；学校、年级、班级暂由学生手动填写，不校验选项名单；六项信息仍必填，学号按字符串保存以保留前导零。
 
 创建录音时传 `task_type: "reading" | "self_expression"`，默认 `reading`。朗读题没有 3 分钟门槛（worker 仍拒绝不足 1 秒的无效音频）；自我表述题要求客户端时长和实际音频时长均不少于 180 秒，且本轮朗读题已经 `ready`。每轮每题最多创建 3 次录音；同一题已入队或完成后不能重复创建。上传失败可用同一个 attempt 重传，finalize 对 queued/processing/ready 幂等。
 
@@ -50,7 +50,7 @@ GET   /api/v1/admin/exports/{id}
 GET   /api/v1/admin/exports/{id}/download
 ```
 
-任务状态为 `draft`、`open`、`closed`、`archived`。只有草稿可以修改题目内容；开放中和已关闭任务可单独修改 `school_options`、`grade_options`、`class_options`，不会改变文本版本。开放任务前必须配置三组下拉选项。关闭任务会阻止创建新录音，但已创建的上传和处理任务会继续。
+任务状态为 `draft`、`open`、`closed`、`archived`。只有草稿可以修改题目内容；开放中和已关闭任务可单独修改 `school_options`、`grade_options`、`class_options`，不会改变文本版本。选项字段保留以兼容已有数据，但后台配置入口暂时隐藏，不再要求配置选项才能开放任务。关闭任务会阻止创建新录音，但已创建的上传和处理任务会继续。
 
 自动质量状态为 `pending/pass/review/reject`，人工审核状态独立为 `pending/approved/rejected`。旧 QC 更新接口保留为兼容入口，新管理页面使用 review 接口。
 

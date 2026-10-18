@@ -72,7 +72,7 @@ def test_consent_and_profile_required_and_version_checked(experiment):
     assert client.post("/api/v1/participant/consent", json={"confirmed": True, "policy_version": "old"}).status_code == 409
     assert client.post("/api/v1/participant/consent", json={"confirmed": True, "policy_version": version}).status_code == 200
     assert client.post("/api/v1/participant/attempts", json={}).status_code == 403
-    for field, value in [("school", "其他学校"), ("name", "   "), ("phone", "123"), ("student_number", "")]:
+    for field, value in [("school", "   "), ("name", "   "), ("phone", "123"), ("student_number", "")]:
         assert client.put("/api/v1/participant/profile", json={**PROFILE, field: value}).status_code == 422
     assert client.put("/api/v1/participant/profile", json=PROFILE).status_code == 200
     assert client.get("/api/v1/participant/context").json()["participant_info"] == PROFILE
@@ -178,3 +178,20 @@ def test_migration_preserves_readings_and_requires_new_consent(tmp_path, monkeyp
         assert attempt["recording_round"] == invite["recording_round"] == 1
         assert attempt["review_status"] == "approved"
     engine.dispose()
+
+
+def test_free_text_profile_and_open_without_options(experiment):
+    client, db, _ = experiment
+    study = db.get(Study, "study-1")
+    study.school_options = []
+    study.grade_options = []
+    study.class_options = []
+    study.status = "closed"
+    db.commit()
+    assert client.post("/api/v1/admin/studies/study-1/open").status_code == 200
+    prepare(client)
+    profile = {**PROFILE, "school": " 手动填写学校 ", "grade": "初二", "class_name": "实验班"}
+    response = client.put("/api/v1/participant/profile", json=profile)
+    assert response.status_code == 200
+    assert response.json()["school"] == "手动填写学校"
+    assert response.json()["class_name"] == "实验班"

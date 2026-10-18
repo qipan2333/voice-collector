@@ -510,11 +510,6 @@ def save_participant_profile(request: ParticipantInfo, participant_session: str 
     ))
     if not consent:
         raise HTTPException(status_code=403, detail="请先确认知情同意")
-    for value, options, label in [(request.school, study.school_options, "学校"),
-                                  (request.grade, study.grade_options, "年级"),
-                                  (request.class_name, study.class_options, "班级")]:
-        if value not in options:
-            raise HTTPException(status_code=422, detail=f"请从任务配置的{label}选项中选择")
     invite.participant_info = request.model_dump()
     db.commit()
     return request
@@ -734,8 +729,6 @@ def open_study(study_id: str, admin_session: str | None = Cookie(default=None), 
         raise HTTPException(status_code=404, detail="任务不存在")
     if study.status not in {"draft", "closed"}:
         raise HTTPException(status_code=409, detail="任务当前无法开放")
-    if not all((study.school_options, study.grade_options, study.class_options)):
-        raise HTTPException(status_code=422, detail="请先配置学校、年级和班级下拉选项")
     study.status = "open"
     _audit(db, "study_opened", "admin", user.id, "study", study.id)
     db.commit()

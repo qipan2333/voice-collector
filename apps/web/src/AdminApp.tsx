@@ -26,9 +26,6 @@ type StudyForm = Pick<
   | "title"
   | "text"
   | "self_expression_prompt"
-  | "school_options"
-  | "grade_options"
-  | "class_options"
   | "instructions"
   | "expected_seconds"
   | "min_seconds"
@@ -40,9 +37,6 @@ const EMPTY_FORM: StudyForm = {
   title: "学生朗读录音任务",
   text: READING_TEXT,
   self_expression_prompt: SELF_EXPRESSION_PROMPT,
-  school_options: [],
-  grade_options: [],
-  class_options: [],
   instructions: "请在安静环境中使用手机完成录音，并保持手机位置稳定。",
   expected_seconds: 180,
   min_seconds: 1,
@@ -106,12 +100,10 @@ function taskIdFromHash() {
 
 function TaskEditor({
   initial,
-  optionsOnly = false,
   onCancel,
   onSave,
 }: {
   initial: StudyForm;
-  optionsOnly?: boolean;
   onCancel: () => void;
   onSave: (form: StudyForm) => Promise<void>;
 }) {
@@ -131,13 +123,13 @@ function TaskEditor({
         <header>
           <div>
             <span className="admin-kicker">任务设置</span>
-            <h2>{optionsOnly ? "配置个人信息选项" : "任务设置"}</h2>
+            <h2>任务设置</h2>
           </div>
           <button className="icon-button" onClick={onCancel} title="关闭">
             <X size={18} />
           </button>
         </header>
-        <fieldset className="task-form-grid" disabled={optionsOnly} style={{ border: 0, padding: 0, margin: 0, display: optionsOnly ? "none" : undefined }}>
+        <fieldset className="task-form-grid" style={{ border: 0, padding: 0, margin: 0 }}>
           <label>
             任务名称
             <input
@@ -202,10 +194,6 @@ function TaskEditor({
             />
           </label>
         </fieldset>
-        <div className="task-form-grid">
-          {([['school_options', '学校'], ['grade_options', '年级'], ['class_options', '班级']] as const).map(([key, label]) => <label key={key}>{label}下拉选项（每行一项）<textarea rows={5} value={form[key].join('\n')} onChange={(event) => set(key, event.target.value.split('\n'))} /></label>)}
-        </div>
-        <p className="hint">开放任务前请填写学校、年级、班级选项，学生须从下拉列表中选择。</p>
         {error && <div className="notice error">{error}</div>}
         <footer className="modal-actions">
           <button className="secondary" onClick={onCancel}>
@@ -218,7 +206,7 @@ function TaskEditor({
               setSaving(true);
               setError("");
               try {
-                await onSave({ ...form, min_seconds: 1, school_options: [...new Set(form.school_options.map((value) => value.trim()).filter(Boolean))], grade_options: [...new Set(form.grade_options.map((value) => value.trim()).filter(Boolean))], class_options: [...new Set(form.class_options.map((value) => value.trim()).filter(Boolean))] });
+                await onSave({ ...form, min_seconds: 1 });
               } catch (reason) {
                 setError(reason instanceof Error ? reason.message : "保存失败");
               } finally {
@@ -636,7 +624,6 @@ export function AdminApp() {
                 <p>更新于 {formatDate(detail.study.updated_at)}</p>
               </div>
               <div className="study-actions">
-                {['open', 'closed'].includes(detail.study.status) && <button className="secondary" onClick={() => setEditor("edit")}><Pencil size={16} />个人信息选项</button>}
                 {detail.study.status === "draft" && (
                   <>
                     <button
@@ -1319,9 +1306,6 @@ export function AdminApp() {
                   title: detail.study.title,
                   text: detail.study.text,
                   self_expression_prompt: detail.study.self_expression_prompt,
-                  school_options: detail.study.school_options,
-                  grade_options: detail.study.grade_options,
-                  class_options: detail.study.class_options,
                   instructions: detail.study.instructions,
                   expected_seconds: detail.study.expected_seconds,
                   min_seconds: detail.study.min_seconds,
@@ -1330,12 +1314,11 @@ export function AdminApp() {
                 }
               : EMPTY_FORM
           }
-          optionsOnly={editor === "edit" && detail?.study.status !== "draft"}
           onCancel={() => setEditor(null)}
           onSave={async (form) => {
             const study =
               editor === "edit" && detail
-                ? await api.updateStudy(detail.study.id, detail.study.status === "draft" ? form : { school_options: form.school_options, grade_options: form.grade_options, class_options: form.class_options })
+                ? await api.updateStudy(detail.study.id, form)
                 : await api.createStudy(form);
             setEditor(null);
             selectTask(study.id);
