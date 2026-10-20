@@ -5,6 +5,7 @@ import { AdminApp as AdminWorkbench } from './AdminApp'
 import { FollowAudioBuffer, FollowProgressTracker, alignTranscript, encodePcmWav, segmentReadingText } from './followAlong'
 import { detectHostApp } from './hostApp'
 import { browserWakeEnvironment, keepScreenAwake, type ScreenWakeStatus } from './screenWakeLock'
+import { cacheProfile, readProfile } from './participantProfile'
 
 type Screen = 'loading' | 'token' | 'student' | 'admin' | 'unsupported'
 type RecorderState = 'idle' | 'checking' | 'recording' | 'review' | 'uploading' | 'processing' | 'error'
@@ -107,12 +108,12 @@ function Shell({ children, eyebrow = 'VOICE COLLECTOR' }: { children: ReactNode;
 
 function UnsupportedBrowser() {
   const copyLink = () => navigator.clipboard?.writeText(window.location.href).catch(() => undefined)
-  return <Shell><section className="hero-card narrow"><div className="status-icon warning">!</div><div className="eyebrow">浏览器不受支持</div><h1>请在微信或手机 QQ 中打开</h1><p className="muted">复制当前邀请链接，发送到微信或手机 QQ 后，在应用内点击链接继续。</p><button className="primary" onClick={copyLink}>复制邀请链接</button></section></Shell>
+  return <Shell><section className="hero-card narrow"><div className="status-icon warning">!</div><div className="eyebrow">浏览器不受支持</div><h1>请在微信或手机 QQ 中打开</h1><p className="muted">复制当前任务链接，发送到微信或手机 QQ 后，在应用内点击链接继续。</p><button className="primary" onClick={copyLink}>复制任务链接</button></section></Shell>
 }
 
 function TokenEntry({ onSubmit }: { onSubmit: (token: string) => void }) {
   const [value, setValue] = useState('')
-  return <Shell><section className="hero-card narrow"><div className="eyebrow">参与语音任务</div><h1>准备好后，开始你的录音。</h1><p className="muted">请打开研究人员发给你的邀请链接。如果你是手动进入，也可以在这里粘贴邀请码。</p><label>邀请码或链接<input value={value} onChange={(event) => setValue(event.target.value)} placeholder="粘贴邀请 token" /></label><button className="primary" disabled={!value.trim()} onClick={() => onSubmit(value.trim().split('/').pop() ?? value.trim())}>继续</button></section></Shell>
+  return <Shell><section className="hero-card narrow"><div className="eyebrow">参与语音任务</div><h1>准备好后，开始你的录音。</h1><p className="muted">请打开研究人员发给你的任务链接。如果你是手动进入，也可以在这里粘贴任务链接。</p><label>任务链接或代码<input value={value} onChange={(event) => setValue(event.target.value)} placeholder="粘贴任务链接或代码" /></label><button className="primary" disabled={!value.trim()} onClick={() => onSubmit(value.trim().split('/').pop() ?? value.trim())}>继续</button></section></Shell>
 }
 
 function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () => Promise<void> }) {
@@ -120,7 +121,8 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(false)
-  const [profile, setProfile] = useState<ParticipantInfo>(context.participant_info ?? { name: '', school: '', grade: '', class_name: '', phone: '', student_number: '' })
+  const [profile, setProfile] = useState<ParticipantInfo>(() => context.participant_info ?? readProfile())
+  useEffect(() => { cacheProfile(profile) }, [profile])
   const attempts = context.attempts.filter((item) => item.recording_round === context.recording_round)
   const readingDone = attempts.some((item) => item.task_type === 'reading' && item.state === 'ready')
   const expressionDone = attempts.some((item) => item.task_type === 'self_expression' && item.state === 'ready')
@@ -133,7 +135,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
     return () => window.clearInterval(interval)
   }, [pending?.id, onRefresh])
 
-  if (readingDone && expressionDone) return <Shell><section className="hero-card narrow"><div className="status-icon success">✓</div><h1>两道题均已提交</h1><p>朗读题和自我表述题已保存，感谢你的参与。</p><p className="muted">若需重新录制，请联系研究人员重新开放邀请码。</p></section></Shell>
+  if (readingDone && expressionDone) return <Shell><section className="hero-card narrow"><div className="status-icon success">✓</div><h1>两道题均已提交</h1><p>朗读题和自我表述题已保存，感谢你的参与。</p><p className="muted">再次打开任务链接即可开始新的填写和录音。</p></section></Shell>
   if (!context.consent_confirmed) return <Shell><section className="hero-card narrow"><div className="eyebrow">第 1 / 4 步</div><h1>知情同意</h1><div className="consent-copy">{CONSENT_TEXT.split('\n\n').map((text) => <p key={text}>{text}</p>)}</div><label className="consent"><input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} />我已阅读并同意参加本次研究</label>{error && <div className="notice error" role="alert">{error}</div>}<button className="primary" disabled={!agreed || saving} onClick={async () => { setSaving(true); setError(''); try { await api.consent(context.study.consent_version); await onRefresh() } catch (reason) { setError(reason instanceof Error ? reason.message : '保存失败，请重试') } finally { setSaving(false) } }}>{saving ? '保存中…' : '同意并继续'}</button></section></Shell>
   if (!context.participant_info || editing) {
     const setField = (key: keyof ParticipantInfo, value: string) => setProfile((current) => ({ ...current, [key]: value }))
@@ -145,7 +147,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
       {error && <div className="notice error" role="alert">{error}</div>}<button className="primary" disabled={saving || context.study.status !== 'open'}>{saving ? '保存中…' : '保存并继续'}</button>
     </form></section></Shell>
   }
-  if (pending) return <Shell><section className="hero-card narrow"><div className="spinner" /><h1>录音正在检查</h1><p>{taskType === 'reading' ? '朗读题处理完成后，将进入自我表述题。' : '自我表述题处理完成后，即完成本次任务。'}</p><p className="muted">录音已经收到，可以稍后重新打开页面继续。</p>{error && <div className="notice error">{error}</div>}<button className="secondary" onClick={() => { void onRefresh().catch(() => setError('状态更新失败，请稍后重试')) }}>刷新状态</button></section></Shell>
+  if (pending) return <Shell><section className="hero-card narrow"><div className="spinner" /><h1>录音正在检查</h1><p>{taskType === 'reading' ? '朗读题处理完成后，将进入自我表述题。' : '自我表述题处理完成后，即完成本次任务。'}</p><p className="muted">录音已经收到，请留在此页面等待处理。</p>{error && <div className="notice error">{error}</div>}<button className="secondary" onClick={() => { void onRefresh().catch(() => setError('状态更新失败，请稍后重试')) }}>刷新状态</button></section></Shell>
   return <Recorder key={`${context.recording_round}-${taskType}`} context={context} taskType={taskType} onRefresh={onRefresh} onEditProfile={() => setEditing(true)} previousError={failed?.error_message} />
 }
 
@@ -466,23 +468,35 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('loading')
   const [context, setContext] = useState<Context | null>(null)
   const [error, setError] = useState('')
+  const initialized = useRef(false)
 
   const loadStudent = useCallback(async () => { const result = await api.context(); setContext(result); setScreen('student') }, [])
   useEffect(() => {
-    if (window.location.hash.startsWith('#/admin')) return setScreen('admin')
-    if (detectHostApp(navigator.userAgent) === 'unsupported') return setScreen('unsupported')
-    if (window.location.hash === '#/student') {
-      loadStudent().catch((err) => { setError(err instanceof Error ? err.message : '会话已失效'); setScreen('token') })
-      return
+    const openRoute = () => {
+      if (window.location.hash.startsWith('#/admin')) return setScreen('admin')
+      if (detectHostApp(navigator.userAgent) === 'unsupported') return setScreen('unsupported')
+      if (window.location.hash === '#/student') {
+        loadStudent().catch((err) => { setError(err instanceof Error ? err.message : '会话已失效'); setScreen('token') })
+        return
+      }
+      const token = tokenFromHash()
+      if (!token) return setScreen('token')
+      setScreen('loading')
+      setContext(null)
+      setError('')
+      api.exchange(token).then(() => { window.history.replaceState({}, '', `${window.location.pathname}#/student`); return loadStudent() }).catch((err) => { setError(err instanceof Error ? err.message : '任务链接无效'); setScreen('token') })
     }
-    const token = tokenFromHash()
-    if (!token) return setScreen('token')
-    api.exchange(token).then(() => { window.history.replaceState({}, '', `${window.location.pathname}#/student`); return loadStudent() }).catch((err) => { setError(err instanceof Error ? err.message : '邀请链接无效'); setScreen('token') })
-  }, [])
+    if (!initialized.current) {
+      initialized.current = true
+      openRoute()
+    }
+    window.addEventListener('hashchange', openRoute)
+    return () => window.removeEventListener('hashchange', openRoute)
+  }, [loadStudent])
 
   if (screen === 'loading') return <Shell><section className="hero-card narrow"><div className="spinner" /><p>正在准备页面…</p></section></Shell>
   if (screen === 'admin') return <AdminWorkbench />
   if (screen === 'unsupported') return <UnsupportedBrowser />
-  if (screen === 'token') return <><TokenEntry onSubmit={(token) => { setScreen('loading'); api.exchange(token).then(loadStudent).catch((err) => { setError(err instanceof Error ? err.message : '邀请链接无效'); setScreen('token') }) }} />{error && <div className="floating-error">{error}</div>}</>
-  return context ? <StudentApp context={context} onRefresh={loadStudent} /> : null
+  if (screen === 'token') return <><TokenEntry onSubmit={(token) => { setScreen('loading'); api.exchange(token).then(() => { window.history.replaceState({}, '', `${window.location.pathname}#/student`); return loadStudent() }).catch((err) => { setError(err instanceof Error ? err.message : '任务链接无效'); setScreen('token') }) }} />{error && <div className="floating-error">{error}</div>}</>
+  return context ? <StudentApp key={`${context.study.id}-${context.participant_code}`} context={context} onRefresh={loadStudent} /> : null
 }

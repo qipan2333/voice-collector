@@ -8,6 +8,7 @@ from sqlalchemy.types import JSON
 
 from .db import Base
 from .experiment import CONSENT_VERSION, READING_TEXT, SELF_EXPRESSION_PROMPT
+from .security import new_token
 
 
 def utcnow() -> datetime:
@@ -21,6 +22,7 @@ class Study(Base):
     __tablename__ = "studies"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    join_token: Mapped[str] = mapped_column(String(64), unique=True, default=new_token)
     title: Mapped[str] = mapped_column(String(200), default="朗读录音任务")
     text: Mapped[str] = mapped_column(Text, default=READING_TEXT)
     self_expression_prompt: Mapped[str] = mapped_column(Text, default=SELF_EXPRESSION_PROMPT)

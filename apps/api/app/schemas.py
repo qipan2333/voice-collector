@@ -171,6 +171,7 @@ class StudyStatsOut(BaseModel):
 class AdminStudyOut(BaseModel):
     study: StudyOut
     stats: StudyStatsOut
+    join_url: str
 
 
 class AdminRecordingOut(BaseModel):

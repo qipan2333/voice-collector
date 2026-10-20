@@ -4,7 +4,7 @@
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| POST | `/api/v1/participant/exchange` | 邀请码交换学生会话 |
+| POST | `/api/v1/participant/exchange` | 公共任务链接创建新的参与记录及学生会话 |
 | GET | `/api/v1/participant/context` | 获取任务、同意状态和历史录音 |
 | POST | `/api/v1/participant/consent` | 写入知情同意回执 |
 | PUT | `/api/v1/participant/profile` | 保存必填个人信息 |
@@ -20,7 +20,9 @@
 
 创建录音时传 `task_type: "reading" | "self_expression"`，默认 `reading`。朗读题没有 3 分钟门槛（worker 仍拒绝不足 1 秒的无效音频）；自我表述题要求客户端时长和实际音频时长均不少于 180 秒，且本轮朗读题已经 `ready`。每轮每题最多创建 3 次录音；同一题已入队或完成后不能重复创建。上传失败可用同一个 attempt 重传，finalize 对 queued/processing/ready 幂等。
 
-Context 返回 `participant_info`、`recording_round`，每条录音返回 `task_type` 和 `recording_round`。只以当前轮的录音恢复进度；本轮两题都处理成功才将邀请设为 `submitted`。管理员重开会增加轮次，保留之前的录音，学生需重录两题。
+每个任务的 `join_token` 唯一且固定，只有管理接口返回公共 `join_url`。`exchange` 传入链接中的 `token`；每次调用都创建新的参与记录和会话，即使浏览器已有会话或之前已经完成，也不会复用录音、个人信息或同意回执。任务未开放时拒绝参与；旧独立邀请码不再有效。
+
+Context 返回 `participant_info`、`recording_round`，每条录音返回 `task_type` 和 `recording_round`。同一次参与中的状态刷新不会重新开始；本轮两题都处理成功才将参与状态设为 `submitted`。再次打开公共链接会开始全新参与，之前已提交的录音仍保留。学生端通过浏览器 localStorage 缓存六项个人信息（包括未完成的填写），下次只预填表单，仍须确认同意和保存信息。
 
 ## 管理接口
 
@@ -50,7 +52,9 @@ GET   /api/v1/admin/exports/{id}
 GET   /api/v1/admin/exports/{id}/download
 ```
 
-任务状态为 `draft`、`open`、`closed`、`archived`。只有草稿可以修改题目内容；开放中和已关闭任务可单独修改 `school_options`、`grade_options`、`class_options`，不会改变文本版本。选项字段保留以兼容已有数据，但后台配置入口暂时隐藏，不再要求配置选项才能开放任务。关闭任务会阻止创建新录音，但已创建的上传和处理任务会继续。
+任务状态为 `draft`（界面显示“未开始”）、`open`、`closed`、`archived`。只有未开始的任务可以修改题目内容；开放中和已关闭任务可单独修改 `school_options`、`grade_options`、`class_options`，不会改变文本版本。选项字段保留以兼容已有数据，但后台配置入口暂时隐藏，不再要求配置选项才能开放任务。关闭任务会阻止创建新录音，但已创建的上传和处理任务会继续。
+
+任务列表和详情返回 `join_url`。公共链接在关闭、重新开放、归档、恢复和内容编辑后保持不变。旧 `/admin/invites/bulk` 仅作为兼容接口，忽略生成数量，总是返回包含一个公共链接的数组，不创建参与记录。`stats.invites_total` 现在表示打开链接产生的参与次数；同一人再次打开也计为新的一次。旧重开接口仍保留兼容，管理页面已移除重开按钮，重录直接打开公共链接即可。
 
 自动质量状态为 `pending/pass/review/reject`，人工审核状态独立为 `pending/approved/rejected`。旧 QC 更新接口保留为兼容入口，新管理页面使用 review 接口。
 

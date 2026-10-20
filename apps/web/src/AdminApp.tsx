@@ -13,7 +13,7 @@ import {
   RotateCcw,
   Search,
   Square,
-  Upload,
+  Copy,
   X,
 } from "lucide-react";
 import { api, type AdminRecording, type AdminStudy, type Study } from "./api";
@@ -45,7 +45,7 @@ const EMPTY_FORM: StudyForm = {
 };
 
 const STUDY_STATUS: Record<string, string> = {
-  draft: "草稿",
+  draft: "未开始",
   open: "开放中",
   closed: "已关闭",
   archived: "已归档",
@@ -89,7 +89,7 @@ function downloadCsv(lines: string[]) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "voice-collector-invites.csv";
+  anchor.download = "voice-collector-study-link.csv";
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -248,13 +248,12 @@ export function AdminApp() {
   const [playingId, setPlayingId] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingIds, setReviewingIds] = useState<string[]>([]);
-  const [reopeningInviteIds, setReopeningInviteIds] = useState<string[]>([]);
   const [reviewNotice, setReviewNotice] = useState<{
     message: string;
-    kind: "approved" | "rejected" | "pending" | "reopened";
+    kind: "approved" | "rejected" | "pending";
   } | null>(null);
   const [recentlyReviewedIds, setRecentlyReviewedIds] = useState<string[]>([]);
-  const [inviteCount, setInviteCount] = useState(100);
+  const [copiedStudyId, setCopiedStudyId] = useState("");
   const [exportMessage, setExportMessage] = useState("");
 
   const loadTasks = useCallback(
@@ -582,7 +581,7 @@ export function AdminApp() {
                   <small>
                     {STUDY_STATUS[item.study.status]} ·{" "}
                     {item.stats.participants_submitted}/
-                    {item.stats.invites_total} 人提交
+                    {item.stats.invites_total} 次完成
                   </small>
                 </span>
                 <span className="task-count">
@@ -605,7 +604,7 @@ export function AdminApp() {
         {!detail ? (
           <div className="admin-empty">
             <h2>选择或创建任务</h2>
-            <p>任务的录音、统计和邀请码将在这里集中管理。</p>
+            <p>任务的录音、统计和公共链接将在这里集中管理。</p>
             <button className="primary" onClick={() => setEditor("create")}>
               <Plus size={17} />
               新建任务
@@ -716,7 +715,7 @@ export function AdminApp() {
                 className={tab === "distribution" ? "active" : ""}
                 onClick={() => setTab("distribution")}
               >
-                邀请码与导出
+                任务链接与导出
               </button>
             </div>
             {tab === "overview" && (
@@ -729,7 +728,7 @@ export function AdminApp() {
                   <div>
                     <span>已提交参与者</span>
                     <strong>{detail.stats.participants_submitted}</strong>
-                    <small>/ {detail.stats.invites_total} 个邀请码</small>
+                    <small>/ {detail.stats.invites_total} 次参与</small>
                   </div>
                   <div className="good">
                     <span>自动质量高</span>
@@ -949,11 +948,7 @@ export function AdminApp() {
                                     {attempt.task_type === "self_expression" ? "自我表述题" : "朗读题"} · 第 {attempt.recording_round} 轮 · {attempt.state}
                                   </small>
                                   {item.participant_info && <details><summary>个人信息</summary><small>{item.participant_info.name} · {item.participant_info.school} · {item.participant_info.grade} · {item.participant_info.class_name}</small><small>手机：{item.participant_info.phone} · 学号：{item.participant_info.student_number}</small></details>}
-                                  {item.invite_status === "reopened" && (
-                                    <small className="reopened-label">
-                                      已允许再次录音
-                                    </small>
-                                  )}
+
                                 </td>
                                 <td>
                                   {formatSeconds(
@@ -1042,71 +1037,7 @@ export function AdminApp() {
                                         <X size={17} />
                                       )}
                                     </button>
-                                    <button
-                                      className="icon-button"
-                                      disabled={
-                                        detail.study.status !== "open" ||
-                                        reopeningInviteIds.includes(
-                                          item.invite_id,
-                                        )
-                                      }
-                                      title={
-                                        detail.study.status !== "open"
-                                            ? "任务开放后才能允许重录"
-                                            : "允许该参与者再次录音"
-                                      }
-                                      onClick={async () => {
-                                        setError("");
-                                        setReopeningInviteIds((current) => [
-                                          ...current,
-                                          item.invite_id,
-                                        ]);
-                                        try {
-                                          await api.reopenInvite(
-                                            item.invite_id,
-                                          );
-                                          setRecordings((current) =>
-                                            current.map((recording) =>
-                                              recording.invite_id ===
-                                              item.invite_id
-                                                ? {
-                                                    ...recording,
-                                                    invite_status: "reopened",
-                                                  }
-                                                : recording,
-                                            ),
-                                          );
-                                          setReviewNotice({
-                                            kind: "reopened",
-                                            message: `${item.participant_code} 已允许再次录音`,
-                                          });
-                                          await refreshSelected();
-                                        } catch (reason) {
-                                          setError(
-                                            reason instanceof Error
-                                              ? reason.message
-                                              : "重开失败",
-                                          );
-                                        } finally {
-                                          setReopeningInviteIds((current) =>
-                                            current.filter(
-                                              (id) => id !== item.invite_id,
-                                            ),
-                                          );
-                                        }
-                                      }}
-                                    >
-                                      {reopeningInviteIds.includes(
-                                        item.invite_id,
-                                      ) ? (
-                                        <LoaderCircle
-                                          className="spin"
-                                          size={17}
-                                        />
-                                      ) : (
-                                        <RotateCcw size={17} />
-                                      )}
-                                    </button>
+
                                   </div>
                                 </td>
                               </tr>
@@ -1210,50 +1141,30 @@ export function AdminApp() {
             {tab === "distribution" && (
               <div className="distribution-grid">
                 <section>
-                  <h2>生成邀请码</h2>
-                  <p>为当前任务生成新的独立参与链接，生成后立即下载 CSV。</p>
+                  <h2>任务公共链接</h2>
+                  <p>所有受试者使用同一个链接。每次打开都会重新开始，个人信息会在本机缓存并预填写。</p>
                   <label>
-                    生成数量
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000}
-                      value={inviteCount}
-                      onChange={(event) =>
-                        setInviteCount(Number(event.target.value))
-                      }
-                    />
+                    参与链接
+                    <input readOnly value={detail.join_url} onFocus={(event) => event.target.select()} />
                   </label>
-                  <button
-                    className="primary"
-                    disabled={detail.study.status !== "open"}
-                    onClick={async () => {
-                      setError("");
+                  <div className="actions">
+                    <button className="primary" onClick={async () => {
                       try {
-                        const links = await api.createInvites(
-                          detail.study.id,
-                          inviteCount,
-                        );
-                        downloadCsv([
-                          "participant_code,url",
-                          ...links.map(
-                            (item) => `${item.participant_code},${item.url}`,
-                          ),
-                        ]);
-                        await refreshSelected();
-                      } catch (reason) {
-                        setError(
-                          reason instanceof Error ? reason.message : "生成失败",
-                        );
+                        await navigator.clipboard.writeText(detail.join_url);
+                        setCopiedStudyId(detail.study.id);
+                        window.setTimeout(() => setCopiedStudyId(""), 2500);
+                      } catch {
+                        setError("请选中上方链接并手动复制。");
                       }
-                    }}
-                  >
-                    <Upload size={17} />
-                    生成并下载 CSV
-                  </button>
-                  {detail.study.status !== "open" && (
-                    <p className="hint">开放任务后才能生成邀请码。</p>
-                  )}
+                    }}>
+                      <Copy size={17} />
+                      {copiedStudyId === detail.study.id ? "已复制" : "复制链接"}
+                    </button>
+                    <button className="secondary" onClick={() => downloadCsv(["url", detail.join_url])}>
+                      <Download size={17} />下载链接
+                    </button>
+                  </div>
+                  {detail.study.status !== "open" && <p className="hint">开放任务后，受试者即可通过此链接参与。</p>}
                 </section>
                 <section>
                   <h2>导出录音</h2>

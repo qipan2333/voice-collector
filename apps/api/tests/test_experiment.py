@@ -160,7 +160,7 @@ def test_migration_preserves_readings_and_requires_new_consent(tmp_path, monkeyp
         conn.execute(studies.insert().values(id="legacy", title="原任务", text="原文不覆盖", text_version="v1", instructions="说明", status="open", expected_seconds=60, min_seconds=30, max_seconds=90, consent_version="consent-v1", created_at=now, updated_at=now))
         conn.execute(invites.insert().values(id="legacy-invite", study_id="legacy", participant_code="P1", token_digest="legacy-token", status="submitted", submitted_at=now, created_at=now))
         conn.execute(attempts.insert().values(id="legacy-audio", invite_id="legacy-invite", attempt_no=1, state="ready", qc_status="pass", review_status="approved", created_at=now, updated_at=now))
-    command.upgrade(config, "head")
+    command.upgrade(config, "7e902f5c81a2")
     metadata = MetaData()
     studies = Table("studies", metadata, autoload_with=engine)
     invites = Table("invites", metadata, autoload_with=engine)

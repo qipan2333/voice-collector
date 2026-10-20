@@ -55,7 +55,7 @@ export type StudyStats = {
   review_rejected: number;
 };
 
-export type AdminStudy = { study: Study; stats: StudyStats };
+export type AdminStudy = { study: Study; stats: StudyStats; join_url: string };
 
 export type AdminRecording = {
   participant_code: string;
@@ -248,11 +248,6 @@ export const api = {
     request<Study>(`/api/v1/admin/studies/${id}/archive`, { method: "POST" }),
   restoreStudy: (id: string) =>
     request<Study>(`/api/v1/admin/studies/${id}/restore`, { method: "POST" }),
-  createInvites: (study_id: string, count: number) =>
-    request<Array<{ participant_code: string; url: string }>>(
-      "/api/v1/admin/invites/bulk",
-      { method: "POST", body: JSON.stringify({ study_id, count }) },
-    ),
   recordings: () =>
     request<{ items: Array<{ participant_code: string; attempt: Attempt }> }>(
       "/api/v1/admin/recordings",

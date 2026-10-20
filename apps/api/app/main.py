@@ -88,6 +88,10 @@ def _study_to_out(study: Study) -> StudyOut:
     return StudyOut.model_validate(study)
 
 
+def _study_join_url(study: Study) -> str:
+    return f"{settings.public_base_url.rstrip('/')}/#/join/{study.join_token}"
+
+
 def _attempt_to_out(attempt: RecordingAttempt) -> AttemptOut:
     return AttemptOut.model_validate(attempt)
 
@@ -405,16 +409,20 @@ def health_ready(db: Session = Depends(get_db)) -> dict[str, object]:
 
 @app.post("/api/v1/participant/exchange")
 def exchange(request: ExchangeRequest, response: Response, db: Session = Depends(get_db)) -> dict[str, str]:
-    invite = db.scalar(select(Invite).where(Invite.token_digest == digest(request.token)))
-    if not invite or invite.status in {"disabled", "withdrawn"}:
-        raise HTTPException(status_code=404, detail="邀请码无效或已关闭")
-    study = db.get(Study, invite.study_id)
-    if not study or study.status != "open":
+    study = db.scalar(select(Study).where(Study.join_token == request.token))
+    if not study:
+        raise HTTPException(status_code=404, detail="任务链接无效")
+    if study.status != "open":
         raise HTTPException(status_code=403, detail="任务当前未开放")
+    invite = Invite(
+        id=str(uuid.uuid4()), study_id=study.id,
+        participant_code=f"P{uuid.uuid4().hex[:24]}",
+        token_digest=digest(new_token()), status="active",
+        first_seen_at=utcnow(), last_access_at=utcnow(),
+    )
+    db.add(invite)
+    db.flush()
     raw_session = new_token()
-    invite.status = "active" if invite.status == "unused" else invite.status
-    invite.first_seen_at = invite.first_seen_at or utcnow()
-    invite.last_access_at = utcnow()
     db.add(ParticipantSession(
         id=str(uuid.uuid4()), invite_id=invite.id, session_digest=digest(raw_session),
         expires_at=expires_in(settings.participant_session_seconds),
@@ -667,7 +675,7 @@ def list_studies(
     total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
     studies = db.scalars(statement.order_by(Study.updated_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200))).all()
     stats = _study_stats_map(db, [study.id for study in studies])
-    return {"items": [AdminStudyOut(study=_study_to_out(study), stats=stats[study.id]).model_dump() for study in studies], "total": total}
+    return {"items": [AdminStudyOut(study=_study_to_out(study), stats=stats[study.id], join_url=_study_join_url(study)).model_dump() for study in studies], "total": total}
 
 
 @app.get("/api/v1/admin/studies/{study_id}", response_model=AdminStudyOut)
@@ -676,7 +684,7 @@ def get_study(study_id: str, admin_session: str | None = Cookie(default=None), d
     study = db.get(Study, study_id)
     if not study:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return AdminStudyOut(study=_study_to_out(study), stats=_study_stats_map(db, [study.id])[study.id])
+    return AdminStudyOut(study=_study_to_out(study), stats=_study_stats_map(db, [study.id])[study.id], join_url=_study_join_url(study))
 
 
 @app.post("/api/v1/admin/studies", response_model=StudyOut)
@@ -777,25 +785,16 @@ def restore_study(study_id: str, admin_session: str | None = Cookie(default=None
     return _study_to_out(study)
 
 
-@app.post("/api/v1/admin/invites/bulk", response_model=list[InviteOut])
+@app.post("/api/v1/admin/invites/bulk", response_model=list[InviteOut], deprecated=True)
 def create_invites(request: BulkInviteRequest, admin_session: str | None = Cookie(default=None), db: Session = Depends(get_db)) -> list[InviteOut]:
-    user = _admin_from_cookie(db, admin_session)
+    _admin_from_cookie(db, admin_session)
     study = db.get(Study, request.study_id)
     if not study:
         raise HTTPException(status_code=404, detail="任务不存在")
     if study.status != "open":
-        raise HTTPException(status_code=409, detail="只有开放中的任务可以生成邀请码")
-    current = db.scalar(select(func.count(Invite.id)).where(Invite.study_id == study.id)) or 0
-    result: list[InviteOut] = []
-    for index in range(request.count):
-        code = f"P{current + index + 1:03d}"
-        raw_token = new_token()
-        invite = Invite(id=str(uuid.uuid4()), study_id=study.id, participant_code=code, token_digest=digest(raw_token), status="unused")
-        db.add(invite)
-        result.append(InviteOut(id=invite.id, participant_code=code, status=invite.status, url=f"{settings.public_base_url.rstrip('/')}/#/join/{raw_token}"))
-    _audit(db, "invites_created", "admin", user.id, "study", study.id, {"count": request.count})
-    db.commit()
-    return result
+        raise HTTPException(status_code=409, detail="只有开放中的任务可以参与")
+    # Compatibility for older admin clients: always return the same shared link.
+    return [InviteOut(id=study.id, participant_code="shared", status=study.status, url=_study_join_url(study))]
 
 
 @app.get("/api/v1/admin/recordings")
