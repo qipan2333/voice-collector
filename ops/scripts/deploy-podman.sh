@@ -70,9 +70,8 @@ git fetch "$BUNDLE" HEAD >>"$LOG" 2>&1
 git merge --ff-only "$COMMIT" >>"$LOG" 2>&1
 cd "$ROOT_DIR/ops"
 echo "构建提交 $COMMIT 的镜像；现有服务继续运行。"
-podman build -t localhost/ops_api:latest -f "$ROOT_DIR/apps/api/Dockerfile" "$ROOT_DIR/apps/api" >>"$LOG" 2>&1
-podman tag localhost/ops_api:latest localhost/ops_worker:latest >>"$LOG" 2>&1
-podman build -t localhost/ops_web:latest -f "$ROOT_DIR/apps/web/Dockerfile" "$ROOT_DIR" >>"$LOG" 2>&1
+echo "构建日志：$LOG（可另开终端 tail -f 查看进度）"
+python3 "$ROOT_DIR/ops/scripts/build-podman.py" "$ROOT_DIR" >>"$LOG" 2>&1
 # podman-compose 1.0.6 ignores --no-deps in up. Remove dependencies explicitly,
 # and resolve relative paths because this manifest lives in the backup directory.
 python3 - "$ROOT_DIR" "$BACKUP_DIR/compose.yml" <<'PYCODE'

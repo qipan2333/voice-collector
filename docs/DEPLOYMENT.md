@@ -17,6 +17,35 @@ docker compose -f ops/docker-compose.yml up -d --build
 docker compose -f ops/docker-compose.yml ps
 ```
 
+## 构建镜像源与缓存
+
+默认使用阿里云 Debian 源 `https://mirrors.aliyun.com`、PyPI 源 `https://mirrors.aliyun.com/pypi/simple/`，以及阿里维护的 npm 源 `https://registry.npmmirror.com`。前端锁文件中的 npm 官方源地址会随 `--registry` 切换，无需修改锁定版本。
+
+Docker Compose 和 ECS Podman 脚本共用 `ops/docker-compose.yml` 的构建参数。配置项见 `.env.example`；现有 ECS 在 `ops/.env` 添加配置即可，未添加时也会使用上述默认镜像。构建配置只支持单行 URL、镜像名和普通引号，不做变量展开。环境变量优先于文件。
+
+阿里云 VPC 中可进一步使用内网镜像；以下 HTTP 地址仅用于阿里云内网，公网默认仍使用 HTTPS：
+
+```env
+APT_MIRROR=http://mirrors.cloud.aliyuncs.com
+PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple/
+PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com
+```
+
+依赖安装层位于业务代码之前：仅修改业务代码会复用已安装的依赖；修改依赖清单时，APT、pip、npm 的下载缓存仍可复用，缓存不进入最终镜像。Docker 需要启用 BuildKit（新版默认启用），Podman 使用 `--layers --pull=missing`，优先复用本机基础镜像及中间层。API 只构建一次并同时供 worker 使用。
+
+首次切换到新 Dockerfile 时需要重新执行依赖安装，后续构建才能完整受益。缓存保存在构建所在主机；不要在每次部署前执行 `builder prune`、`podman system prune` 或使用 `--no-cache`。npm 使用 `--prefer-offline`，并关闭安装时的 audit/fund 网络请求。
+
+基础容器镜像可通过 `PYTHON_IMAGE`、`NODE_IMAGE`、`CADDY_IMAGE` 指向自己的阿里云 ACR 仓库，默认保持现有版本以复用本地镜像。阿里云容器镜像加速地址与账号及服务权限有关，软件包镜像域名不能直接用于拉取这些基础镜像。
+
+在现有 ECS 上只构建镜像、查看完整构建进度（不重启服务）：
+
+```bash
+cd /root/voice-collector
+python3 ops/scripts/build-podman.py
+```
+
+该命令会更新本机 `localhost/ops_*:latest` 镜像标签，随后执行部署脚本时可复用构建结果。远程部署脚本也会输出构建日志路径，可另开 SSH 终端用 `tail -f` 查看。完整部署日志包含运行配置，应只在服务器上查看。
+
 ## 必填配置
 
 ```env

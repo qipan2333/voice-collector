@@ -44,12 +44,13 @@ elif args[:1] == ['exec']:
 '''
 
 
-def run_deploy(tmp_path, failure=None):
+def run_deploy(tmp_path, failure=None, build_env=''):
     project = tmp_path / 'project'
     project.mkdir()
-    for folder in ['ops', 'data', 'postgres-data', 'apps/api', 'apps/web']:
+    for folder in ['ops/scripts', 'data', 'postgres-data', 'apps/api', 'apps/web']:
         (project / folder).mkdir(parents=True, exist_ok=True)
-    (project / 'ops/.env').write_text('APP_SECRET=test\n')
+    (project / 'ops/.env').write_text('APP_SECRET=test\n' + build_env)
+    (project / 'ops/scripts/build-podman.py').write_text((ROOT / 'ops/scripts/build-podman.py').read_text())
     (project / 'ops/docker-compose.yml').write_text((ROOT / 'ops/docker-compose.yml').read_text())
     (project / '.gitignore').write_text('ops/.env\ndata/\npostgres-data/\n')
     def git(*args):
@@ -72,6 +73,8 @@ def run_deploy(tmp_path, failure=None):
         script.chmod(0o755)
     log = tmp_path / 'commands.jsonl'
     env = {**os.environ, 'PATH': f'{binaries}:{os.environ["PATH"]}', 'TEST_PROJECT': str(project), 'COMMAND_LOG': str(log), 'DEPLOY_LOCK_FILE': str(tmp_path / 'deploy.lock'), 'FAIL_STAGE': failure or ''}
+    for key in ['PYTHON_IMAGE', 'APT_MIRROR', 'PIP_INDEX_URL', 'PIP_TRUSTED_HOST', 'NODE_IMAGE', 'CADDY_IMAGE', 'NPM_REGISTRY']:
+        env.pop(key, None)
     result = subprocess.run(['bash', str(ROOT / 'ops/scripts/deploy-podman.sh'), 'deploy', str(project), str(bundle), commit], env=env, capture_output=True, text=True)
     commands = [json.loads(line) for line in log.read_text().splitlines()]
     return result, commands, tmp_path
@@ -95,6 +98,34 @@ def test_deploy_orders_backup_migration_and_services(tmp_path):
     assert all('depends_on' not in service for service in config['services'].values())
     assert config['services']['db']['volumes'][0].startswith(str(root / 'project/postgres-data'))
     assert next(root.glob('voice-collector-backup-*/database.dump')).stat().st_size > 0
+    builds = [c for c in commands if c[:2] == ['podman', 'build']]
+    assert len(builds) == 2  # API and worker share a single build.
+    assert all('--layers' in c and '--pull=missing' in c for c in builds)
+    assert 'PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/' in builds[0]
+    assert 'APT_MIRROR=https://mirrors.aliyun.com' in builds[0]
+    assert 'NPM_REGISTRY=https://registry.npmmirror.com' in builds[1]
+
+
+def test_deploy_passes_only_build_settings_without_executing_env(tmp_path):
+    marker = tmp_path / 'must-not-exist'
+    result, commands, _ = run_deploy(tmp_path, build_env=(
+        'APT_MIRROR=http://mirrors.cloud.aliyuncs.com\n'
+        'PIP_INDEX_URL="http://mirrors.cloud.aliyuncs.com/pypi/simple/" # ECS VPC\n'
+        'PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com\n'
+        'export NPM_REGISTRY=https://registry.npmmirror.com\n'
+        "PYTHON_IMAGE='registry.example.com/team/python:3.13'\n"
+        f'UNRELATED=$(touch {marker})\n'
+        'ADMIN_PASSWORD=PRIVATE_ENV_VALUE\n'
+    ))
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    builds = [c for c in commands if c[:2] == ['podman', 'build']]
+    assert 'APT_MIRROR=http://mirrors.cloud.aliyuncs.com' in builds[0]
+    assert 'PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple/' in builds[0]
+    assert 'PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com' in builds[0]
+    assert 'PYTHON_IMAGE=registry.example.com/team/python:3.13' in builds[0]
+    assert not any('PRIVATE_ENV_VALUE' in arg or 'UNRELATED' in arg for c in builds for arg in c)
+    assert 'PRIVATE_ENV_VALUE' not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize('failure', ['build', 'backup', 'health'])
