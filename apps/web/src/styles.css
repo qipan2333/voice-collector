@@ -29,11 +29,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .consent { display: flex; grid-template-columns: none; align-items: flex-start; gap: 10px; padding: 14px; border-radius: 15px; background: #f5f7fd; }
 .consent input { width: 19px; height: 19px; margin-top: 2px; accent-color: #626df2; }
 .reading-text { position: relative; max-height: min(58vh, 620px); margin: 26px 0; padding: 24px; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; white-space: pre-wrap; background: #fbfaf6; border: 1px solid #f0eadb; border-radius: 8px; font-size: clamp(18px, 3.5vw, 24px); line-height: 1.95; }
-.reading-phrase { border-radius: 4px; color: #273044; transition: color .25s ease, background-color .25s ease, box-shadow .25s ease; }
-.reading-text.following .reading-phrase.completed { color: #3e866b; }
-.reading-text.following .reading-phrase.active { color: #172033; background: #fff0a8; box-shadow: 0 0 0 3px #fff0a8; }
-.asr-disclosure { margin: 14px 0; padding: 12px 14px; color: #536178; background: #eef6f2; border-left: 3px solid #4d9478; font-size: 13px; line-height: 1.65; }
-.follow-status { margin: 8px 0 10px; color: #536178; font-size: 13px; }
 .recorder-panel { position: sticky; bottom: 12px; margin: 0 -8px -8px; padding: 18px; background: rgba(255,255,255,.96); border: 1px solid #e4e8f1; border-radius: 19px; box-shadow: 0 14px 35px rgba(37,48,85,.12); }
 .timer { font-variant-numeric: tabular-nums; font-size: 32px; font-weight: 800; letter-spacing: -.04em; }
 .timer small { margin-left: 8px; color: #858da1; font-size: 13px; letter-spacing: 0; font-weight: 600; }

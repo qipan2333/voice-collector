@@ -68,6 +68,7 @@ podman inspect ops_api_1 ops_worker_1 ops_web_1 --format '{{.Name}} {{.Image}}' 
 git fetch "$BUNDLE" HEAD >>"$LOG" 2>&1
 [[ "$(git rev-parse FETCH_HEAD)" == "$COMMIT" ]]
 git merge --ff-only "$COMMIT" >>"$LOG" 2>&1
+[[ "$(git rev-parse HEAD)" == "$COMMIT" ]] || { echo '服务器 HEAD 与待部署提交不一致，停止部署。' >&2; false; }
 cd "$ROOT_DIR/ops"
 echo "构建提交 $COMMIT 的镜像；现有服务继续运行。"
 echo "构建日志：$LOG（可另开终端 tail -f 查看进度）"

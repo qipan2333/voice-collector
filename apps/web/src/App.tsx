@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, Context, type ParticipantInfo } from './api'
 import { CONSENT_TEXT, MIN_RECORDING_SECONDS } from './experiment'
 import { AdminApp as AdminWorkbench } from './AdminApp'
-import { FollowAudioBuffer, FollowProgressTracker, alignTranscript, encodePcmWav, segmentReadingText } from './followAlong'
 import { detectHostApp } from './hostApp'
 import { browserWakeEnvironment, keepScreenAwake, type ScreenWakeStatus } from './screenWakeLock'
 import { cacheProfile, readProfile } from './participantProfile'
@@ -116,11 +115,11 @@ function TokenEntry({ onSubmit }: { onSubmit: (token: string) => void }) {
   return <Shell><section className="hero-card narrow"><div className="eyebrow">参与语音任务</div><h1>准备好后，开始你的录音。</h1><p className="muted">请打开研究人员发给你的任务链接。如果你是手动进入，也可以在这里粘贴任务链接。</p><label>任务链接或代码<input value={value} onChange={(event) => setValue(event.target.value)} placeholder="粘贴任务链接或代码" /></label><button className="primary" disabled={!value.trim()} onClick={() => onSubmit(value.trim().split('/').pop() ?? value.trim())}>继续</button></section></Shell>
 }
 
-function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () => Promise<void> }) {
+export function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () => Promise<void> }) {
   const [agreed, setAgreed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(true)
   const [profile, setProfile] = useState<ParticipantInfo>(() => context.participant_info ?? readProfile())
   useEffect(() => { cacheProfile(profile) }, [profile])
   const attempts = context.attempts.filter((item) => item.recording_round === context.recording_round)
@@ -151,7 +150,7 @@ function StudentApp({ context, onRefresh }: { context: Context; onRefresh: () =>
   return <Recorder key={`${context.recording_round}-${taskType}`} context={context} taskType={taskType} onRefresh={onRefresh} onEditProfile={() => setEditing(true)} previousError={failed?.error_message} />
 }
 
-function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }: { context: Context; taskType: 'reading' | 'self_expression'; onRefresh: () => Promise<void>; onEditProfile: () => void; previousError?: string }) {
+export function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }: { context: Context; taskType: 'reading' | 'self_expression'; onRefresh: () => Promise<void>; onEditProfile: () => void; previousError?: string }) {
   const isReading = taskType === 'reading'
   const minimumSeconds = isReading ? 0 : MIN_RECORDING_SECONDS
   const [recorderState, setRecorderState] = useState<RecorderState>('idle')
@@ -162,15 +161,11 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     return keepScreenAwake(setWakeStatus, browserWakeEnvironment())
   }, [recorderState, wakeRetry])
   const [message, setMessage] = useState('')
-  const [followMessage, setFollowMessage] = useState('')
-  const [activePhrase, setActivePhrase] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [level, setLevel] = useState(0)
   const [blob, setBlob] = useState<Blob | null>(null)
   const [audioUrl, setAudioUrl] = useState('')
   const [progress, setProgress] = useState(0)
-  const phrases = useMemo(() => segmentReadingText(context.study.text), [context.study.text])
-  const followInterval = Math.max(2, context.follow_along_interval_seconds || 8)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
   const chunks = useRef<Blob[]>([])
@@ -178,97 +173,11 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
   const audioContext = useRef<AudioContext | null>(null)
   const pcmCapture = useRef<PcmCapture | null>(null)
   const recorderSettings = useRef<Record<string, unknown>>({})
-  const reader = useRef<HTMLElement | null>(null)
-  const phraseElements = useRef<Array<HTMLSpanElement | null>>([])
-  const manualScrollUntil = useRef(0)
-  const activePhraseRef = useRef(0)
-  const confirmedPhraseRef = useRef(0)
-  const followProgress = useRef(new FollowProgressTracker(phrases, context.study.expected_seconds))
-  const followAudio = useRef(new FollowAudioBuffer(followInterval + 1))
-  const followInFlight = useRef(false)
-  const followSequence = useRef(0)
-  const followSessionId = useRef('')
-  const followActive = useRef(false)
-  const followSpeaking = useRef(false)
-
   const startedAt = useRef(0)
   const submittedAttemptId = useRef<string | null>(null)
   const uploadComplete = useRef(false)
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl) }, [audioUrl])
-
-  const scrollToPhrase = (index: number) => {
-    if (Date.now() < manualScrollUntil.current) return
-    const container = reader.current
-    const element = phraseElements.current[index]
-    if (!container || !element) return
-    const top = element.offsetTop - container.clientHeight * 0.42
-    container.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
-  }
-
-  const resetFollowAlong = () => {
-    activePhraseRef.current = 0
-    confirmedPhraseRef.current = 0
-    setActivePhrase(0)
-    setFollowMessage('跟读会根据你的朗读自动移动。')
-    followProgress.current = new FollowProgressTracker(phrases, context.study.expected_seconds)
-    followAudio.current = new FollowAudioBuffer(followInterval + 1)
-    followInFlight.current = false
-    followSequence.current = 0
-    followActive.current = false
-    followSpeaking.current = false
-    followSessionId.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    reader.current?.scrollTo({ top: 0 })
-  }
-
-  const flushFollowChunk = async () => {
-    if (!context.follow_along_enabled || !followActive.current || followInFlight.current) return
-    const input = followAudio.current.takeReadyWindow(followInterval)
-    if (!input) return
-    const sequence = followSequence.current
-    followSequence.current += 1
-    followInFlight.current = true
-    setFollowMessage('正在校准朗读位置…')
-    try {
-      const wav = encodePcmWav(input.chunks, input.sampleRate)
-      const result = await api.transcribeChunk(followSessionId.current, sequence, wav)
-      if (followActive.current && result.transcript) {
-        const next = alignTranscript(phrases, confirmedPhraseRef.current, result.transcript)
-        if (next > confirmedPhraseRef.current) {
-          confirmedPhraseRef.current = next
-          const snapshot = followProgress.current.confirmPhrase(next)
-          if (snapshot.activePhrase > activePhraseRef.current) {
-            activePhraseRef.current = snapshot.activePhrase
-            setActivePhrase(snapshot.activePhrase)
-            window.requestAnimationFrame(() => scrollToPhrase(snapshot.activePhrase))
-          }
-        }
-        setFollowMessage('正在跟随朗读')
-      }
-    } catch (error) {
-      if (followActive.current) setFollowMessage('正在本地跟随；云端校准暂时不可用。')
-    } finally {
-      followInFlight.current = false
-      if (followActive.current && followAudio.current.isReady(followInterval)) void flushFollowChunk()
-    }
-  }
-
-  const collectFollowFrame = (data: Float32Array, sampleRate: number, rms: number) => {
-    if (!followActive.current) return
-    const snapshot = followProgress.current.addFrame(rms, data.length / sampleRate)
-    if (snapshot.activePhrase > activePhraseRef.current) {
-      activePhraseRef.current = snapshot.activePhrase
-      setActivePhrase(snapshot.activePhrase)
-      window.requestAnimationFrame(() => scrollToPhrase(snapshot.activePhrase))
-    }
-    if (snapshot.speaking !== followSpeaking.current) {
-      followSpeaking.current = snapshot.speaking
-      setFollowMessage(snapshot.speaking ? '正在跟随朗读' : '等待继续朗读…')
-    }
-    if (!context.follow_along_enabled) return
-    followAudio.current.push(data, sampleRate, snapshot.speaking)
-    if (followAudio.current.isReady(followInterval)) void flushFollowChunk()
-  }
 
   const stopStream = () => {
     if (pcmCapture.current) {
@@ -289,7 +198,6 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
 
   const cleanup = useCallback(() => {
     if (timer.current) window.clearInterval(timer.current)
-    followActive.current = false
     stopStream()
   }, [])
 
@@ -318,7 +226,6 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
       if (pcmChunk) pcmChunks.push(pcmChunk)
       const rms = Math.sqrt(energy / data.length)
       setLevel(Math.min(1, rms * 3))
-      collectFollowFrame(data, context.sampleRate, rms)
     }
     source.connect(processor)
     processor.connect(mute)
@@ -353,13 +260,11 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     if (!context.consent_confirmed || !context.participant_info) return
     submittedAttemptId.current = null
     uploadComplete.current = false
-    resetFollowAlong()
     setRecorderState('checking'); setMessage('正在请求麦克风权限…')
     try {
       if (!window.isSecureContext) throw new Error('当前地址不是 HTTPS 安全页面，浏览器不会开放麦克风。')
       const input = await requestMicrophone()
       stream.current = input
-      followActive.current = isReading
       if (typeof MediaRecorder === 'undefined') {
         await startPcmFallback(input)
         return
@@ -403,7 +308,7 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
       try {
         await startAudioProcessing(input, false)
       } catch {
-        setFollowMessage('当前环境无法启用跟读定位；录音仍可正常完成。')
+        // The level meter is optional; MediaRecorder continues recording.
       }
     } catch (error) {
       stopStream()
@@ -414,7 +319,6 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
 
   const stopRecording = () => {
     if ((performance.now() - startedAt.current) / 1000 < minimumSeconds) return
-    followActive.current = false
     if (mediaRecorder.current?.state === 'recording') mediaRecorder.current.stop()
     else if (pcmCapture.current) finishPcmRecording()
   }
@@ -439,7 +343,6 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     }
   }
 
-  const showReadingProgress = isReading && (recorderState === 'recording' || recorderState === 'review')
   const taskOpen = context.study.status === 'open'
   return <Shell><section className="hero-card recording-layout">
     <div className="topline"><span className="eyebrow">第 {isReading ? '3' : '4'} / 4 步 · {context.participant_code}</span><span className="pill">{isReading ? '朗读题' : '自我表述题'}</span></div>
@@ -451,15 +354,14 @@ function Recorder({ context, taskType, onRefresh, onEditProfile, previousError }
     <p className="muted">准备好后按“开始”进行表述，结束后按“完成”，试听确认后提交语音。</p>
     {!taskOpen && <div className="notice error">任务已经关闭，无法开始新的录音。</div>}
     {previousError && <div className="notice error">上一段录音处理失败：{previousError}。请重新录制。</div>}
-    {isReading ? <article ref={reader} className={`reading-text ${showReadingProgress ? 'following' : ''}`} onTouchStart={() => { manualScrollUntil.current = Date.now() + 5000 }} onWheel={() => { manualScrollUntil.current = Date.now() + 5000 }}>{phrases.map((phrase, index) => <span ref={(element) => { phraseElements.current[index] = element }} className={`reading-phrase ${showReadingProgress && index < activePhrase ? 'completed' : ''} ${showReadingProgress && index === activePhrase ? 'active' : ''}`} key={phrase.id}>{phrase.text}</span>)}</article> : <article className="reading-text expression-prompt">{context.study.self_expression_prompt}</article>}
+    {isReading ? <article className="reading-text">{context.study.text}</article> : <article className="reading-text expression-prompt">{context.study.self_expression_prompt}</article>}
     <div className="recorder-panel"><div className="timer">{formatSeconds(elapsed)}<small>{isReading ? '读完即可完成' : '/ 至少 03:00'}</small></div><div className="meter"><span style={{ transform: `scaleX(${Math.max(0.02, level)})` }} /></div>
-    {isReading && followMessage && recorderState === 'recording' && <div className="follow-status">{followMessage}</div>}
     {recorderState === 'recording' && <div className="notice" role="status">{wakeStatus === 'active' ? '屏幕常亮已开启，录音结束后自动恢复。' : wakeStatus === 'requesting' ? '正在请求屏幕常亮…' : <><span>当前未能保持屏幕常亮，请将手机自动锁屏时间调长或设为“永不”，并保持本页面在前台。</span><button className="secondary" onClick={() => setWakeRetry((value) => value + 1)}>重试屏幕常亮</button></>}</div>}
     {message && <div className="notice" role="status">{message}</div>}
     {recorderState === 'review' && elapsed < minimumSeconds && <div className="notice error">录音不足3分钟，请重新录制。</div>}
     {recorderState === 'review' && audioUrl && <audio controls src={audioUrl} className="audio-preview" />}
     {recorderState === 'uploading' && <div className="upload-progress"><span style={{ width: `${progress * 100}%` }} /></div>}
-    <div className="actions">{recorderState === 'idle' || recorderState === 'error' ? <><button className="secondary" onClick={onEditProfile}>修改个人信息</button><button className="primary" onClick={beginRecording} disabled={!taskOpen}>开始</button></> : recorderState === 'recording' ? <button className="complete-recording" disabled={elapsed < minimumSeconds} onClick={stopRecording}>{elapsed < minimumSeconds ? `完成（还需 ${formatSeconds(minimumSeconds - elapsed)}）` : '完成'}</button> : recorderState === 'review' ? <><button className="secondary" onClick={() => { setBlob(null); setAudioUrl(''); setElapsed(0); setRecorderState('idle'); resetFollowAlong() }}>重新录制</button><button className="primary" disabled={elapsed < minimumSeconds} onClick={submit}>提交{isReading ? '朗读题' : '自我表述题'}</button></> : recorderState === 'processing' ? <span className="muted">后台处理中…</span> : null}</div></div>
+    <div className="actions">{recorderState === 'idle' || recorderState === 'error' ? <><button className="secondary" onClick={onEditProfile}>修改个人信息</button><button className="primary" onClick={beginRecording} disabled={!taskOpen}>开始</button></> : recorderState === 'recording' ? <button className="complete-recording" disabled={elapsed < minimumSeconds} onClick={stopRecording}>{elapsed < minimumSeconds ? `完成（还需 ${formatSeconds(minimumSeconds - elapsed)}）` : '完成'}</button> : recorderState === 'review' ? <><button className="secondary" onClick={() => { setBlob(null); setAudioUrl(''); setElapsed(0); setRecorderState('idle') }}>重新录制</button><button className="primary" disabled={elapsed < minimumSeconds} onClick={submit}>提交{isReading ? '朗读题' : '自我表述题'}</button></> : recorderState === 'processing' ? <span className="muted">后台处理中…</span> : null}</div></div>
   </section></Shell>
 
 }

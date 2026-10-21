@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { formatApiError } from './api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api, formatApiError } from './api'
 
 describe('formatApiError', () => {
   it('returns string details unchanged', () => {
@@ -14,4 +14,14 @@ describe('formatApiError', () => {
   it('uses a fallback for unknown response bodies', () => {
     expect(formatApiError({}, '上传失败 (502)')).toBe('上传失败 (502)')
   })
+})
+
+
+afterEach(() => vi.unstubAllGlobals())
+
+it('fetches fresh participant context after exchanging a link', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
+  vi.stubGlobal('fetch', fetchMock)
+  await api.context()
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/participant/context', expect.objectContaining({ cache: 'no-store', credentials: 'include' }))
 })
